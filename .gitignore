@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Cached datasets (ChEMBL, TDC) - re-downloaded by scripts as needed
+.cache/
+
+# Session logs
+session-*.md
+
+# macOS
+.DS_Store
