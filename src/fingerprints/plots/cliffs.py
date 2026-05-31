@@ -29,6 +29,7 @@ from typeguard import typechecked
 from fingerprints.clustering.cliffs import (
     CliffExamplePair,
     CliffSimResult,
+    mcs_diff_atoms,
 )
 from fingerprints.plots.groupings import grouped_order, style_for
 
@@ -36,20 +37,49 @@ from fingerprints.plots.groupings import grouped_order, style_for
 def _draw_pair_image(
     mol_a: Mol,
     mol_b: Mol,
+    highlight_a: list[int] | None = None,
+    highlight_b: list[int] | None = None,
     size: tuple[int, int] = (700, 260),
+    highlight_color: tuple[float, float, float] = (1.0, 0.55, 0.55),  # soft red
 ) -> np.ndarray:
+    """Render two molecules side by side, optionally highlighting atoms.
+
+    If `highlight_a` / `highlight_b` are given, the listed atom indices
+    on each molecule are drawn with a red highlight. Used to mark atoms
+    outside the maximum common substructure - i.e. the parts that
+    differ between the pair.
+    """
     half_w = size[0] // 2
     h = size[1]
 
-    def _draw_one(mol: Mol) -> Image.Image:
+    def _draw_one(mol: Mol, highlight: list[int] | None) -> Image.Image:
         drawer = rdMolDraw2D.MolDraw2DCairo(half_w, h)
         drawer.drawOptions().clearBackground = True
-        drawer.DrawMolecule(mol)
+        if highlight:
+            atom_colors = {idx: highlight_color for idx in highlight}
+            # Also highlight bonds connecting two highlight atoms
+            highlight_bonds: list[int] = []
+            bond_colors: dict[int, tuple[float, float, float]] = {}
+            highlight_set = set(highlight)
+            for bond in mol.GetBonds():
+                if (bond.GetBeginAtomIdx() in highlight_set
+                        and bond.GetEndAtomIdx() in highlight_set):
+                    highlight_bonds.append(bond.GetIdx())
+                    bond_colors[bond.GetIdx()] = highlight_color
+            drawer.DrawMolecule(
+                mol,
+                highlightAtoms=highlight,
+                highlightAtomColors=atom_colors,
+                highlightBonds=highlight_bonds,
+                highlightBondColors=bond_colors,
+            )
+        else:
+            drawer.DrawMolecule(mol)
         drawer.FinishDrawing()
         return Image.open(io.BytesIO(drawer.GetDrawingText())).convert("RGB")
 
-    img_a = _draw_one(mol_a)
-    img_b = _draw_one(mol_b)
+    img_a = _draw_one(mol_a, highlight_a)
+    img_b = _draw_one(mol_b, highlight_b)
     composite = Image.new("RGB", size, "white")
     composite.paste(img_a, (0, 0))
     composite.paste(img_b, (half_w, 0))
@@ -149,8 +179,10 @@ def _draw_pair_cell(
     pki_a: float,
     pki_b: float,
     metric_lines: list[tuple[str, bool]],
+    highlight_a: list[int] | None = None,
+    highlight_b: list[int] | None = None,
 ) -> None:
-    img = _draw_pair_image(mol_a, mol_b)
+    img = _draw_pair_image(mol_a, mol_b, highlight_a=highlight_a, highlight_b=highlight_b)
     ax_mol.imshow(img)
     ax_mol.set_xticks([])
     ax_mol.set_yticks([])
@@ -261,11 +293,17 @@ def plot_cliff_examples(
             (f"({_format_fold(most.delta_y)} potency)", False),
             (f"graph distance = {most.graph_distance}", False),
         ]
+        most_diff = mcs_diff_atoms(mols[most.i], mols[most.j])
+        most_hl_a, most_hl_b = (
+            (most_diff[0], most_diff[1]) if most_diff is not None else (None, None)
+        )
         _draw_pair_cell(
             ax_m_mol, ax_m_metrics,
             mols[most.i], mols[most.j],
             float(y[most.i]), float(y[most.j]),
             m_lines,
+            highlight_a=most_hl_a,
+            highlight_b=most_hl_b,
         )
 
         # Least cliff-blind
@@ -277,11 +315,17 @@ def plot_cliff_examples(
             (f"({_format_fold(least.delta_y)} potency)", False),
             (f"graph distance = {least.graph_distance}", False),
         ]
+        least_diff = mcs_diff_atoms(mols[least.i], mols[least.j])
+        least_hl_a, least_hl_b = (
+            (least_diff[0], least_diff[1]) if least_diff is not None else (None, None)
+        )
         _draw_pair_cell(
             ax_l_mol, ax_l_metrics,
             mols[least.i], mols[least.j],
             float(y[least.i]), float(y[least.j]),
             l_lines,
+            highlight_a=least_hl_a,
+            highlight_b=least_hl_b,
         )
 
     if title:

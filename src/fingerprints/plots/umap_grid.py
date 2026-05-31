@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from loguru import logger
 from matplotlib.colors import Normalize, TwoSlopeNorm
+from matplotlib.lines import Line2D
+from rdkit.Chem import MolFromSmiles
 from typeguard import typechecked
 
 from fingerprints.clustering.embed import EmbeddingResult
@@ -252,7 +254,8 @@ def plot_umap_grid_family_overlay(
     family_membership: np.ndarray,
     color_values: np.ndarray,
     color_kind: str,
-    family_labels: list[str],
+    family_smiles: list[str],
+    family_labels: list[str] | None = None,
     color_label: str = "",
     cmap: str = "viridis",
     title: str = "",
@@ -260,8 +263,9 @@ def plot_umap_grid_family_overlay(
     bg_point_alpha: float = 0.18,
     fg_point_size: float = 22.0,
     fg_point_alpha: float = 0.95,
-    figsize: tuple[float, float] = (24.0, 12.0),
+    figsize: tuple[float, float] = (24.0, 13.5),
     dpi: int = 200,
+    structure_px: int = 320,
 ) -> Path:
     """UMAP grid with all points greyed out and 1+ families overlaid.
 
@@ -269,17 +273,21 @@ def plot_umap_grid_family_overlay(
         embeddings: dict short_id -> EmbeddingResult (UMAP fit on full set)
         out_path: file to write
         family_membership: int array of shape (n_mols,). -1 = background,
-            0..len(family_labels)-1 = family index. Points with family
+            0..len(family_smiles)-1 = family index. Points with family
             index >= 0 are drawn as larger markers on top, colored by
             color_values via cmap (continuous) or by binary palette.
         color_values: per-molecule property value
         color_kind: "continuous" or "binary"
-        family_labels: human-readable labels for each family index, used in
-            the legend (one entry per distinct family). Family 0 is drawn
-            as circles, family 1 as triangles, etc. (up to 4 markers).
+        family_smiles: SMILES of each family's scaffold; rendered as mol
+            images in the legend strip at the bottom of the figure. Family
+            0 is drawn as circles, family 1 as triangles, etc. (up to 4
+            markers).
+        family_labels: optional short text labels appended under each mol
+            image (e.g. "n=219, range 9.5"). Same length as family_smiles.
         color_label: text for the colorbar (continuous case)
         cmap: matplotlib colormap (continuous mode)
         title: figure suptitle
+        structure_px: pixel size for each rendered scaffold image
 
     Returns:
         Path that was written.
@@ -289,11 +297,15 @@ def plot_umap_grid_family_overlay(
 
     family_membership = np.asarray(family_membership)
     color_values = np.asarray(color_values)
-    n_families = len(family_labels)
+    n_families = len(family_smiles)
     if n_families == 0:
         raise ValueError("need at least one family")
     if n_families > 4:
         raise ValueError("only 4 distinct family markers supported")
+    if family_labels is not None and len(family_labels) != n_families:
+        raise ValueError(
+            f"family_labels length {len(family_labels)} != n_families {n_families}"
+        )
 
     short_ids = list(embeddings.keys())
     order = grouped_order(short_ids)
@@ -303,23 +315,37 @@ def plot_umap_grid_family_overlay(
     n_cols = 4
     n_rows = (n + n_cols - 1) // n_cols
 
+    # Layout: top n_rows rows are panels, plus optional colorbar column on
+    # the right; the bottom row (height 0.55) is the family legend strip
+    # with rendered scaffold images.
     needs_cbar = color_kind == "continuous"
+    legend_row_height = 0.55
+    panel_row_heights = [1.0] * n_rows
+    height_ratios = panel_row_heights + [legend_row_height]
+    total_rows = n_rows + 1
+
+    fig = plt.figure(figsize=figsize)
     if needs_cbar:
-        fig = plt.figure(figsize=figsize)
         gs = fig.add_gridspec(
-            n_rows, n_cols + 1,
+            total_rows, n_cols + 1,
             width_ratios=[1.0] * n_cols + [0.04],
+            height_ratios=height_ratios,
             wspace=0.08, hspace=0.18,
         )
         axes_flat = [fig.add_subplot(gs[r, c])
                      for r in range(n_rows) for c in range(n_cols)]
-        cbar_ax = fig.add_subplot(gs[:, n_cols])
+        cbar_ax = fig.add_subplot(gs[:n_rows, n_cols])
+        legend_gs = gs[n_rows, :n_cols]
     else:
-        fig, axes = plt.subplots(
-            n_rows, n_cols, figsize=figsize, squeeze=False
+        gs = fig.add_gridspec(
+            total_rows, n_cols,
+            height_ratios=height_ratios,
+            wspace=0.08, hspace=0.18,
         )
-        axes_flat = list(axes.flatten())
+        axes_flat = [fig.add_subplot(gs[r, c])
+                     for r in range(n_rows) for c in range(n_cols)]
         cbar_ax = None
+        legend_gs = gs[n_rows, :]
 
     # shared color normalization across all panels
     norm = None
@@ -387,48 +413,93 @@ def plot_umap_grid_family_overlay(
     for ax_idx in range(n, n_rows * n_cols):
         axes_flat[ax_idx].axis("off")
 
-    # colorbar / binary legend
+    # colorbar
     if needs_cbar and last_continuous_sc is not None:
         assert cbar_ax is not None
         fig.colorbar(last_continuous_sc, cax=cbar_ax, label=color_label)
 
-    # family legend (marker shape encodes family identity)
-    from matplotlib.lines import Line2D
+    # ---- bottom legend strip: marker + scaffold image + optional label ----
+    # Subdivide the legend gridspec cell into n_families + (1 if binary else 0)
+    # equal cells. Each family cell contains: a tiny marker swatch on the
+    # left, the rendered scaffold mol image, and an optional caption below.
+    n_legend_cells = n_families + (2 if color_kind == "binary" else 0)
+    legend_inner = legend_gs.subgridspec(1, n_legend_cells, wspace=0.05)
 
-    family_handles = [
-        Line2D([0], [0], marker=family_markers[fi], color="w",
-               markerfacecolor="#666666", markeredgecolor="black",
-               markersize=9, label=family_labels[fi])
-        for fi in range(n_families)
-    ]
+    for fi in range(n_families):
+        cell_ax = fig.add_subplot(legend_inner[0, fi])
+        cell_ax.axis("off")
+
+        # Render the scaffold mol
+        mol = MolFromSmiles(family_smiles[fi])
+        if mol is not None:
+            img = _mol_to_image_array(mol, size=structure_px)
+            cell_ax.imshow(img)
+
+        # Marker swatch + label as title above the image
+        marker = family_markers[fi]
+        # Draw marker via scatter into a tiny inset above-left of the image
+        title_str = f"family {fi}"
+        if family_labels is not None and family_labels[fi]:
+            title_str += f"  ({family_labels[fi]})"
+        # Use the cell title with the marker rendered to the left via a
+        # short matplotlib path effect: easiest is two-text approach. We
+        # use a small Line2D handle in a per-cell legend.
+        handle = Line2D(
+            [0], [0], marker=marker, color="w",
+            markerfacecolor="#666666", markeredgecolor="black",
+            markersize=10, label=title_str,
+        )
+        cell_ax.legend(
+            handles=[handle], loc="upper center",
+            bbox_to_anchor=(0.5, 1.18),
+            frameon=False, fontsize=10, handletextpad=0.4,
+        )
+
+    # binary class swatches in the remaining legend cells
     if color_kind == "binary":
-        binary_handles = [
-            Line2D([0], [0], marker="o", color="w",
-                   markerfacecolor=binary_colors[0], markersize=8,
-                   label=f"{color_label} = 0"),
-            Line2D([0], [0], marker="o", color="w",
-                   markerfacecolor=binary_colors[1], markersize=8,
-                   label=f"{color_label} = 1"),
-        ]
-        handles = family_handles + binary_handles
-    else:
-        handles = family_handles
-
-    fig.legend(handles=handles, loc="lower center",
-               ncol=len(handles), bbox_to_anchor=(0.5, 0.01),
-               frameon=False, fontsize=11)
+        for ci, (val, col) in enumerate(zip((0, 1), binary_colors)):
+            cell_ax = fig.add_subplot(legend_inner[0, n_families + ci])
+            cell_ax.axis("off")
+            handle = Line2D(
+                [0], [0], marker="o", color="w",
+                markerfacecolor=col, markeredgecolor="black",
+                markersize=12, label=f"{color_label} = {val}",
+            )
+            cell_ax.legend(
+                handles=[handle], loc="center",
+                frameon=False, fontsize=11, handletextpad=0.4,
+            )
 
     if title:
         fig.suptitle(title, fontsize=15)
 
-    if not needs_cbar:
-        fig.tight_layout(rect=(0, 0.05, 1.0, 0.96 if title else 1.0))
-    else:
-        # leave room for the bottom legend and the top title
-        fig.subplots_adjust(top=0.93 if title else 0.97, bottom=0.08)
+    # Don't call tight_layout - it fights with the manually-placed colorbar
+    # and the inset legends. Adjust margins explicitly.
+    fig.subplots_adjust(
+        top=0.93 if title else 0.97,
+        bottom=0.02,
+        left=0.03,
+        right=0.97 if needs_cbar else 0.99,
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     logger.info(f"wrote {out_path}")
     return out_path
+
+
+def _mol_to_image_array(mol, size: int = 320) -> np.ndarray:
+    """Render an RDKit mol to an RGB numpy array (mirrors pair_plots)."""
+    import io
+
+    from PIL import Image
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    drawer = rdMolDraw2D.MolDraw2DCairo(size, size)
+    drawer.drawOptions().clearBackground = True
+    drawer.DrawMolecule(mol)
+    drawer.FinishDrawing()
+    png = drawer.GetDrawingText()
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    return np.asarray(img)

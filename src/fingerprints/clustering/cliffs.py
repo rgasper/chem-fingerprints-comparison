@@ -114,6 +114,34 @@ def _mcs_atoms(mol_i: Mol, mol_j: Mol, timeout: int = 2) -> int | None:
     return int(res.numAtoms)
 
 
+def mcs_diff_atoms(
+    mol_i: Mol, mol_j: Mol, timeout: int = 2,
+) -> tuple[list[int], list[int]] | None:
+    """Atoms in each molecule that are NOT part of the MCS.
+
+    Used by the example-figure plot to highlight the differing atoms.
+    Returns (diff_atoms_i, diff_atoms_j) as lists of atom indices, or
+    None if MCS computation fails.
+    """
+    res = rdFMCS.FindMCS(
+        [mol_i, mol_j],
+        timeout=timeout,
+        atomCompare=rdFMCS.AtomCompare.CompareElements,
+        bondCompare=rdFMCS.BondCompare.CompareOrder,
+        completeRingsOnly=False,
+    )
+    if res.canceled:
+        return None
+    patt = res.queryMol
+    match_i = mol_i.GetSubstructMatch(patt)
+    match_j = mol_j.GetSubstructMatch(patt)
+    if not match_i or not match_j:
+        return None
+    diff_i = [a.GetIdx() for a in mol_i.GetAtoms() if a.GetIdx() not in match_i]
+    diff_j = [a.GetIdx() for a in mol_j.GetAtoms() if a.GetIdx() not in match_j]
+    return diff_i, diff_j
+
+
 @typechecked
 def find_cliff_pairs(
     mols: list,

@@ -221,6 +221,7 @@ def select_top_families(
     n_families: int = 2,
     min_size: int = 15,
     min_scaffold_atoms: int = 12,
+    max_pairwise_tanimoto: float = 0.7,
     exclude_acyclic: bool = True,
 ) -> list[str]:
     """Pick scaffolds with many members AND wide property range.
@@ -230,6 +231,12 @@ def select_top_families(
     property_range is max(y) - min(y); for binary y this collapses to 1 if
     both classes are present, 0 otherwise, so the ranking effectively
     becomes "biggest scaffold with class diversity."
+
+    Diversity guard: when picking the top n_families in score order, a
+    candidate is rejected if its Morgan(r=2) Tanimoto similarity to any
+    already-selected scaffold exceeds max_pairwise_tanimoto. This prevents
+    selecting two near-duplicate scaffolds (e.g. saturated vs. unsaturated
+    A-ring of the same steroid skeleton).
 
     The min_scaffold_atoms filter exists to skip generic ring catch-alls
     like plain benzene (c1ccccc1, 6 heavy atoms) which match too many
@@ -247,6 +254,9 @@ def select_top_families(
         min_scaffold_atoms: minimum heavy atoms in the scaffold itself
             (filters out generic single-ring scaffolds). Set to 0 to
             disable.
+        max_pairwise_tanimoto: reject a candidate if its Morgan(r=2)
+            Tanimoto similarity to any already-selected scaffold exceeds
+            this. Set to 1.0 to disable.
         exclude_acyclic: drop the synthetic acyclic bucket from candidates
             (acyclic molecules are a heterogeneous catch-all, not a real
             chemical family)
@@ -270,23 +280,52 @@ def select_top_families(
             continue
         by_scaf.setdefault(s, []).append(float(yi))
 
-    candidates: list[tuple[str, int, float, float]] = []
+    # build (score-ranked) list of candidate scaffolds + their mols
+    candidates: list[tuple[str, int, float, float, Mol]] = []
     for s, vals in by_scaf.items():
         size = len(vals)
         if size < min_size:
             continue
-        if min_scaffold_atoms > 0:
-            scaf_mol = MolFromSmiles(s)
-            if scaf_mol is None:
-                continue
-            if scaf_mol.GetNumHeavyAtoms() < min_scaffold_atoms:
-                continue
+        scaf_mol = MolFromSmiles(s)
+        if scaf_mol is None:
+            continue
+        if min_scaffold_atoms > 0 and scaf_mol.GetNumHeavyAtoms() < min_scaffold_atoms:
+            continue
         prange = float(max(vals) - min(vals))
         score = size * prange
-        candidates.append((s, size, prange, score))
+        candidates.append((s, size, prange, score, scaf_mol))
 
     candidates.sort(key=lambda t: t[3], reverse=True)
-    chosen = candidates[:n_families]
+
+    # greedy diversity-filtered selection. Use Morgan r=2, 2048 bits as
+    # the comparison FP - matches what the rest of the project uses.
+    from rdkit.Chem import rdFingerprintGenerator
+    from rdkit.DataStructs import TanimotoSimilarity
+
+    morgan_gen = rdFingerprintGenerator.GetMorganGenerator(
+        radius=2, fpSize=2048
+    )
+
+    chosen: list[tuple[str, int, float, float]] = []
+    chosen_fps = []
+    for s, size, prange, score, mol in candidates:
+        fp = morgan_gen.GetFingerprint(mol)
+        too_similar = False
+        for prev_fp in chosen_fps:
+            if TanimotoSimilarity(fp, prev_fp) > max_pairwise_tanimoto:
+                too_similar = True
+                break
+        if too_similar:
+            logger.info(
+                f"skipped near-duplicate (Tanimoto > "
+                f"{max_pairwise_tanimoto}): scaffold={s}"
+            )
+            continue
+        chosen.append((s, size, prange, score))
+        chosen_fps.append(fp)
+        if len(chosen) >= n_families:
+            break
+
     for s, size, prange, score in chosen:
         logger.info(
             f"selected family: size={size} range={prange:.2f} "

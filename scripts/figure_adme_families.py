@@ -67,6 +67,23 @@ def _short_family_label(scaffold_smiles: str, max_len: int = 40) -> str:
     return scaffold_smiles[: max_len - 1] + "..."
 
 
+def _family_caption(
+    n_in: int, y_clean: np.ndarray, mask: np.ndarray, task_type: str
+) -> str:
+    """Short caption shown under each rendered scaffold image."""
+    vals = y_clean[mask]
+    finite = vals[np.isfinite(vals)]
+    if task_type == "regression" and finite.size:
+        return (
+            f"n={n_in}, range "
+            f"{float(finite.min()):.2f}-{float(finite.max()):.2f}"
+        )
+    if task_type == "classification" and finite.size:
+        n_pos = int((finite > 0.5).sum())
+        return f"n={n_in} ({n_pos} pos / {n_in - n_pos} neg)"
+    return f"n={n_in}"
+
+
 def run_one(
     ds: TDCDataset,
     chemeleon: CheMeleonFingerprint,
@@ -115,10 +132,15 @@ def run_one(
     for fi, scaf in enumerate(chosen):
         family_membership[scaf_arr == scaf] = fi
 
-    family_labels = [_short_family_label(s) for s in chosen]
-    for fi, lbl in enumerate(family_labels):
-        n_in = int((family_membership == fi).sum())
-        logger.info(f"family {fi}: n={n_in} {lbl}")
+    # captions for the legend strip
+    family_labels: list[str] = []
+    for fi, scaf in enumerate(chosen):
+        mask = family_membership == fi
+        n_in = int(mask.sum())
+        family_labels.append(_family_caption(n_in, y_clean, mask, ds.task_type))
+        logger.info(
+            f"family {fi}: n={n_in} {_short_family_label(scaf)}"
+        )
 
     fps = _build_fps(mols, chemeleon, mist_28m)
     embeddings = embed_all(
@@ -138,6 +160,7 @@ def run_one(
             family_membership=family_membership,
             color_values=y_clean,
             color_kind="continuous",
+            family_smiles=chosen,
             family_labels=family_labels,
             color_label=ds.property_label,
             cmap="viridis",
@@ -154,6 +177,7 @@ def run_one(
             family_membership=family_membership,
             color_values=y_clean.astype(int),
             color_kind="binary",
+            family_smiles=chosen,
             family_labels=family_labels,
             color_label=ds.property_label,
             title=(
