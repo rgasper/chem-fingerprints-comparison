@@ -233,10 +233,14 @@ def select_top_families(
     becomes "biggest scaffold with class diversity."
 
     Diversity guard: when picking the top n_families in score order, a
-    candidate is rejected if its Morgan(r=2) Tanimoto similarity to any
-    already-selected scaffold exceeds max_pairwise_tanimoto. This prevents
-    selecting two near-duplicate scaffolds (e.g. saturated vs. unsaturated
-    A-ring of the same steroid skeleton).
+    candidate is rejected if its MACCS Tanimoto similarity to any
+    already-selected scaffold exceeds max_pairwise_tanimoto. MACCS is
+    chosen here (rather than Morgan) because the legend renders the
+    scaffolds as drawings, and MACCS captures global ring/pharmacophore
+    features that better track visual similarity than Morgan's local atom
+    environments. This prevents selecting two visually near-duplicate
+    scaffolds (e.g. saturated vs. unsaturated A-ring of the same steroid
+    skeleton).
 
     The min_scaffold_atoms filter exists to skip generic ring catch-alls
     like plain benzene (c1ccccc1, 6 heavy atoms) which match too many
@@ -254,9 +258,9 @@ def select_top_families(
         min_scaffold_atoms: minimum heavy atoms in the scaffold itself
             (filters out generic single-ring scaffolds). Set to 0 to
             disable.
-        max_pairwise_tanimoto: reject a candidate if its Morgan(r=2)
-            Tanimoto similarity to any already-selected scaffold exceeds
-            this. Set to 1.0 to disable.
+        max_pairwise_tanimoto: reject a candidate if its MACCS Tanimoto
+            similarity to any already-selected scaffold exceeds this. Set
+            to 1.0 to disable.
         exclude_acyclic: drop the synthetic acyclic bucket from candidates
             (acyclic molecules are a heterogeneous catch-all, not a real
             chemical family)
@@ -297,19 +301,19 @@ def select_top_families(
 
     candidates.sort(key=lambda t: t[3], reverse=True)
 
-    # greedy diversity-filtered selection. Use Morgan r=2, 2048 bits as
-    # the comparison FP - matches what the rest of the project uses.
-    from rdkit.Chem import rdFingerprintGenerator
+    # greedy diversity-filtered selection. Use MACCS keys (167 bits, ring-
+    # and pharmacophore-aware) as the comparison FP because the goal here
+    # is *visual* distinctness of the scaffold drawings - MACCS captures
+    # global ring/pharmacophore features rather than Morgan's local atom
+    # environments, so e.g. saturated vs. unsaturated A-ring on the same
+    # steroid skeleton score as similar (which they look).
+    from rdkit.Chem.MACCSkeys import GenMACCSKeys
     from rdkit.DataStructs import TanimotoSimilarity
-
-    morgan_gen = rdFingerprintGenerator.GetMorganGenerator(
-        radius=2, fpSize=2048
-    )
 
     chosen: list[tuple[str, int, float, float]] = []
     chosen_fps = []
     for s, size, prange, score, mol in candidates:
-        fp = morgan_gen.GetFingerprint(mol)
+        fp = GenMACCSKeys(mol)
         too_similar = False
         for prev_fp in chosen_fps:
             if TanimotoSimilarity(fp, prev_fp) > max_pairwise_tanimoto:
@@ -317,7 +321,7 @@ def select_top_families(
                 break
         if too_similar:
             logger.info(
-                f"skipped near-duplicate (Tanimoto > "
+                f"skipped near-duplicate (MACCS Tanimoto > "
                 f"{max_pairwise_tanimoto}): scaffold={s}"
             )
             continue
