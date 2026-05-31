@@ -106,7 +106,7 @@ def _mcs_atoms(mol_i: Mol, mol_j: Mol, timeout: int = 2) -> int | None:
         [mol_i, mol_j],
         timeout=timeout,
         atomCompare=rdFMCS.AtomCompare.CompareElements,
-        bondCompare=rdFMCS.BondCompare.CompareOrder,
+        bondCompare=rdFMCS.BondCompare.CompareOrderExact,
         completeRingsOnly=False,
     )
     if res.canceled:
@@ -127,7 +127,7 @@ def mcs_diff_atoms(
         [mol_i, mol_j],
         timeout=timeout,
         atomCompare=rdFMCS.AtomCompare.CompareElements,
-        bondCompare=rdFMCS.BondCompare.CompareOrder,
+        bondCompare=rdFMCS.BondCompare.CompareOrderExact,
         completeRingsOnly=False,
     )
     if res.canceled:
