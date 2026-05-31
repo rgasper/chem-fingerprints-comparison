@@ -17,7 +17,7 @@ Eight fingerprints (six classical RDKit + two neural) probed across six lenses. 
 | 2 | ADME alignment | Does FP geometry track ADME properties? |
 | 3 | Agreement matrix | How redundant are the FPs across each other? |
 | 4 | Scaffold hopping | Does the FP preserve scaffold structure, and is that bought at the cost of property awareness? |
-| 5 | Activity cliffs | How often does each FP host activity cliffs in its top-k neighborhoods? |
+| 5 | Activity cliffs | For pre-defined activity cliffs (small chemical change, large potency change), what similarity score does each FP assign? |
 
 There's also a clustering experiment under `figures/clustering/` (HDBSCAN over UMAP-reduced fingerprints on a 10k-molecule random ChEMBL sample). The result was that random ChEMBL is too scaffold-diverse to cluster meaningfully — useful as a sanity check that "fingerprint geometry → clusters" is not a free lunch, but not the central story.
 
@@ -29,16 +29,35 @@ There's also a clustering experiment under `figures/clustering/` (HDBSCAN over U
 
 The RV agreement matrix is the clearest evidence. Classical FPs are not redundant with each other — most pairs sit at RV 0.30–0.40. RDKit-topo and Avalon agree most (0.62, both path-based). MIST-28M is alone in its corner (RV ~0.15–0.30 with most others). CheMeleon bridges classical and MIST. AtomPair turns out to be the "connector" — high RV with both CheMeleon (0.66) and MIST (0.65) while still being related to the classical block.
 
-### The two neural FPs are very different from each other
+### Both neural FPs are heavily cliff-blind
 
-Lumping them together is misleading. The scaffold-vs-property Pareto and the cliff false-friend summary tell the same story:
+Activity cliffs are pairs of structurally-similar molecules with very different potency. We define them fingerprint-agnostically: graph_distance ≤ 5 (atoms not shared via the maximum common substructure) AND |ΔpKi| ≥ 2.0. Then for each cliff pair we ask each FP for its similarity score:
 
-![scaffold-property Pareto](figures/scaffolds/02_purity_vs_property_pareto_k5.png)
+![cliff-blind summary](figures/cliffs/03_cliff_blind_summary.png)
 
-![false-friend rate summary](figures/cliffs/04_false_friend_summary.png)
+The hierarchy is consistent across all three ChEMBL targets:
 
-- **CheMeleon behaves like a high-resolution classical FP**. It dominates the scaffold–property Pareto on AqSolDB — both highest scaffold purity AND highest kNN R². It's competitive with the best classicals on activity cliffs. The "neural FPs abandon chemistry" critique does not apply.
-- **MIST-28M behaves like an abstract embedding**. It's the least scaffold-anchored, the most distinct in the RV matrix, and consistently the worst at avoiding false friends in its neighborhoods. It's measuring something different — possibly useful when paired with a strong supervised model that exploits its non-classical geometry, but a poor pick for direct similarity-based retrieval.
+- **Morgan, TopTorsion, AtomPair** correctly score most cliffs as low-similarity (cliff-blind rate ≤ 25% on most datasets).
+- **MACCS, RDKit-topo, Avalon** sit in the middle — their similarity scales are coarser, so cliffs more often come out above 0.7.
+- **CheMeleon and MIST-28M score nearly every cliff as similar** (cliff-blind rate 83–100%). Their similarity scales simply don't go low enough to discriminate cliff pairs from non-cliff pairs.
+
+The D3 receptor violins make the scale issue stark:
+
+![D3 cliff violins](figures/cliffs/01_cliff_similarity_violins_CHEMBL234_Ki.png)
+
+Median cliff-pair similarity: Morgan 0.30, TopTorsion 0.37, RDKit-topo 0.42, Avalon 0.48, AtomPair 0.50, MACCS 0.70, **CheMeleon 0.86, MIST 0.92**. The neural FPs literally never score a cliff below ~0.6 on this dataset.
+
+This is the most important caveat for using neural FPs in any retrieval-style workflow: **two molecules with cosine 0.9 in CheMeleon or MIST space can have 100× different potency**.
+
+### CheMeleon and MIST are different in other ways though
+
+Lumping them as "the neural FPs" still misleads on every probe except cliffs:
+
+- **CheMeleon dominates the scaffold-vs-property Pareto on AqSolDB** ([figure](figures/scaffolds/02_purity_vs_property_pareto_k5.png)) — both highest scaffold purity AND highest kNN R² on logS prediction. MIST sits in the middle of the pack.
+- **MIST is the least scaffold-anchored** of all 8 FPs (scaffold purity 0.55 on AqSolDB vs 0.62–0.68 for everyone else, including CheMeleon).
+- **MIST is the most isolated in the agreement matrix** (RV ~0.15–0.30 with most other FPs); CheMeleon sits closer to the classical block (RV 0.40–0.66).
+
+Both are heavily cliff-blind, but only one (CheMeleon) is well-suited to ADME prediction. They reach the same problem from different directions: MIST's geometry is genuinely different from classical FPs (and that broad geometry can't resolve cliffs); CheMeleon's geometry is much more chemistry-aware but uses a similarity scale tuned for "this molecule is in the same chemotype family", not "this molecule has the same activity."
 
 ### Classical FPs are also not interchangeable
 
@@ -46,42 +65,44 @@ The pair plots already hinted at this — even on four hand-picked pairs the cla
 
 ![drug pair similarity summary](figures/pairs/drug/03_within_pair_distance_summary.png)
 
-- **Morgan** is the most idiosyncratic — its highest off-diagonal in the RV matrix is only 0.57 (with TopTorsion). Atom-environment hashing preserves both scaffold and decoration in a way path-based FPs don't.
-- **Avalon** is the dark horse. 512 bits, performs at the level of the 2048-bit FPs across nearly everything (best scaffold purity on AqSolDB, ties best on cliff false-friend rate on Thrombin/GSK-3β).
-- **MACCS** is short (167 bits) and fast, with a measurable accuracy cost: 2–4 percentage points worse on cliff false-friend rate, slightly higher cliff RMSE penalty. The size/speed tradeoff is real but not crippling.
-- **RDKit-topo, AtomPair, TopTorsion** look similar on paper. They aren't (RV 0.28–0.62 with each other). If ensembling with Morgan, **AtomPair** gives the most distinct second view.
+- **Morgan** is the most idiosyncratic and the best at recognizing cliffs as different (median cliff similarity 0.30 on D3). Its highest off-diagonal in the RV matrix is only 0.57. Atom-environment hashing preserves both scaffold and decoration in a way path-based FPs don't.
+- **Avalon** is the dark horse for non-cliff tasks. 512 bits, performs at the level of the 2048-bit FPs on scaffold purity (best on AqSolDB) and ADME prediction. But on cliffs its median similarity is high (0.48 on D3) — like the other path-based FPs, it has trouble distinguishing methyl-vs-OMe-style cliffs.
+- **MACCS** is short (167 bits) and fast. The cliff-blind rate is the highest among the classical FPs (49%–92% across datasets) because 167 bits don't have the resolution to distinguish small-change cliffs.
+- **RDKit-topo, AtomPair, TopTorsion** look similar on paper. They aren't (RV 0.28–0.62 with each other). On cliffs they vary widely: TopTorsion is the second-best after Morgan (median 0.37 on D3), AtomPair is in the middle (0.50), RDKit-topo is ~10 points more cliff-blind than its path-based siblings.
 
 ## Gotchas
 
 **General:**
 
-- **Don't bake one FP into how you define your test.** Defining cliffs as "Morgan ≥ 0.9 with large Δy" reduces every other FP comparison to "agreement with Morgan." The false-friend rate is fingerprint-symmetric — each FP is judged on its own neighborhood.
+- **Don't bake one FP into how you define your test.** An earlier version of the cliff probe used "Morgan ≥ 0.9 with large Δy" or "kNN top-k" definitions; both reduced fingerprint comparison to "agreement with whichever FP we used to define the cliff set." The current cliff probe defines pairs from molecular graph properties only (graph_distance ≤ 5, |ΔpKi| ≥ 2.0).
 - **Local geometry ≠ global geometry.** All FPs show useful local kNN signal but only modest global Spearman ρ — see the right panel below, ρ ≤ 0.25 everywhere on logS:
 
   ![logS alignment](figures/adme/03_alignment_solubility_aqsoldb.png)
 
   Methods that rely on global geometry (UMAP-then-cluster, Spearman over all pairs) amplify whatever idiosyncrasy each FP has.
 - **Scaffold-purity needs scaffold-repeat-rich data.** Random ChEMBL is so scaffold-diverse (4490 unique scaffolds per 5000 molecules) that purity-at-k is mostly noise. AqSolDB has dense repeats and is the right venue.
-- **Cliff RMSE is dataset-dependent.** On D3 receptor every FP showed *negative* cliff penalty (cliff regions are densely sampled). On Thrombin and GSK-3β the expected positive penalty appeared. Don't draw conclusions from one cliff dataset.
 
 **Per-fingerprint:**
 
-- **MACCS** has only 167 bits — distinct molecules collide more often.
-- **MIST cosine scores are NOT on the same scale as Tanimoto.** Cosine 0.4 between two MIST embeddings does not mean what 0.4 Tanimoto means. Threshold-based intuition built on Morgan does not transfer. Use rank-based comparisons or per-FP-calibrated thresholds.
-- **CheMeleon similarity is "chemistry-aware" but not biology-aware.** High CheMeleon similarity doesn't mean two molecules will share activity — they remain subject to activity cliffs at roughly the same rate as classical FPs.
+- **MACCS** has only 167 bits — distinct molecules collide more often, and small-change activity cliffs almost always come out high-similarity (cliff-blind rate 73–92%).
+- **MIST cosine scores are NOT on the same scale as Tanimoto.** Cosine 0.4 between two MIST embeddings does not mean what 0.4 Tanimoto means. The cliff-pair probe makes this concrete: MIST median similarity over D3 cliff pairs is 0.92 (Morgan's is 0.30). Threshold-based intuition built on Morgan does not transfer. Use rank-based comparisons or per-FP-calibrated thresholds.
+- **CheMeleon similarity is "chemistry-aware" but not biology-aware.** It scores activity cliffs at median similarity 0.86 on D3 — chemically the molecules in a cliff pair really are very similar, and CheMeleon agrees. It just doesn't know that small chemical change can imply huge potency change.
 - **Morgan's "two molecules share a key motif" failure mode** is real: two compounds can both light up the same Morgan bit while differing globally. The drug-sized pair heatmap shows this — 0.75 Tanimoto between aniline-quinazoline and gefitinib, driven entirely by their shared core:
 
   ![Morgan drug-sized pair heatmap](figures/pairs/drug/01_pair_similarity_morgan.png)
+
+  Conversely, on properly-defined cliffs (small change → big activity change) Morgan is the best discriminator we tested — its bit-vector resolution captures small modifications well.
 
 ## Practical takeaway
 
 Pick the fingerprint for the question:
 
-- **Activity-aware retrieval / kNN regression** on a known target → Morgan, AtomPair, or CheMeleon.
+- **Activity-cliff-sensitive retrieval** on a known target → Morgan or TopTorsion. Both keep cliff-blind rates ≤ 25% on most ChEMBL targets we tested. Avoid neural FPs and MACCS for this.
+- **ADME prediction** (logS, logD, BBB) by kNN regression → CheMeleon dominates on logS and lipophilicity. The cliff blindness doesn't hurt as much when properties are smoothly distributed (no single methyl-swap is going to flip logS by 100×).
 - **Chemotype discovery / clustering** in a drug-like library → if natural clusters exist at all, MACCS and Avalon are most likely to surface them; MIST is the least scaffold-anchored and least likely to.
-- **Feature input to a supervised neural model** → MIST's distinctness from classical FPs may be the point.
-- **One general-purpose FP** → CheMeleon is the strongest single choice we tested.
-- **Ensembling** → pair Morgan with AtomPair (or with a neural FP) for maximally distinct views.
+- **Feature input to a supervised neural model** → MIST's distinctness from classical FPs may be the point. The downstream model can re-learn cliff structure from labels.
+- **One general-purpose FP** → no single winner. Morgan handles cliffs and pair-level similarity well but is dominated by CheMeleon on ADME-property kNN. CheMeleon handles ADME but is heavily cliff-blind. Use Morgan for retrieval, CheMeleon for property prediction.
+- **Ensembling** → pair Morgan with AtomPair (or with CheMeleon) for maximally distinct views. The agreement matrix shows AtomPair is the bridge between classical and neural FPs.
 
 ## Reproducing
 
