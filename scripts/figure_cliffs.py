@@ -1,16 +1,23 @@
 """Generate activity-cliff figures on three MoleculeACE targets.
 
-For each target (Dopamine D3, Thrombin, GSK-3 beta) we produce:
-- 01_false_friend_rate_<target>.png: bar chart of top-k false-friend rate.
-- 02_neighbor_dy_violins_<target>.png: violin distributions of |Delta y| at top-k.
-- 03_cliff_rmse_<target>.png: kNN regression RMSE on cliff vs non-cliff test mols.
+Activity cliffs are defined fingerprint-agnostically: pairs of molecules
+with |delta pKi| >= 2.0 and graph_distance <= 5 (where graph_distance =
+n_atoms_i + n_atoms_j - 2 * mcs_atoms). For each fingerprint we measure
+its similarity over the cliff pair set and report:
 
-Plus one cross-dataset:
-- 04_false_friend_summary.png: heatmap (datasets x fingerprints).
+- 01_cliff_similarity_violins_<target>.png: distribution of similarities
+  per fingerprint. Lower = better.
+- 02_cliff_examples_<target>.png: per-FP molecule-pair illustrations of
+  the most cliff-blind and least cliff-blind cases.
+- 03_cliff_blind_summary.png: cross-dataset heatmap of P(sim >= 0.7).
+
+Cliff candidates are cached at .cache/cliff_pairs/<dataset>.pkl since the
+MCS verification step is expensive (~10s for GSK-3 beta, ~1 min for
+Thrombin/D3 with thread-parallel MCS).
 
 Run:
   uv run python scripts/figure_cliffs.py
-  uv run python scripts/figure_cliffs.py --k 10 --threshold 1.5  # tune k / cliff threshold
+  uv run python scripts/figure_cliffs.py --no-cache  # recompute candidates
 """
 
 from __future__ import annotations
@@ -25,19 +32,11 @@ from loguru import logger
 from rdkit.Chem import MolFromSmiles
 
 from fingerprints.clustering.cliffs import (
-    DEFAULT_CLIFF_THRESHOLD,
-    BestCatchExample,
-    CatchRateResult,
-    CliffRMSEResult,
-    FalseFriendExample,
-    FalseFriendResult,
-    MCSCliffCandidate,
-    best_cliff_catches_for_all,
-    cliff_catch_rate_for_all,
-    cliff_knn_rmse_for_all,
-    false_friend_rate_for_all,
-    find_mcs_cliff_candidates,
-    worst_false_friends_for_all,
+    CliffPair,
+    CliffSimResult,
+    cliff_similarity_for_all,
+    find_cliff_pairs,
+    select_cliff_examples_for_all,
 )
 from fingerprints.data.molace import (
     D3_DOPAMINE,
@@ -51,20 +50,14 @@ from fingerprints.fingerprint_methods.base import FingerprintResult
 from fingerprints.fingerprint_methods.chemeleon_fp import CheMeleonFingerprint
 from fingerprints.fingerprint_methods.mist_fp import MIST_28M, MISTFingerprint
 from fingerprints.plots.cliffs import (
-    plot_catch_rate_summary,
-    plot_cliff_rmse_bars,
-    plot_false_friend_bars,
-    plot_false_friend_summary,
-    plot_neighbor_dy_violins,
-)
-from fingerprints.plots.cliff_examples import (
+    plot_cliff_blind_summary,
     plot_cliff_examples,
-    plot_worst_false_friend_examples,
+    plot_cliff_similarity_violins,
 )
 
 
 CACHE_MOLACE = Path(".cache/molace")
-CACHE_CANDIDATES = Path(".cache/cliff_candidates")
+CACHE_CLIFFS = Path(".cache/cliff_pairs")
 FIG_DIR = Path("figures/cliffs")
 
 DATASETS = (D3_DOPAMINE, THROMBIN, GSK3B)
@@ -85,167 +78,99 @@ def _build_fps(
     return fps
 
 
-def _load_dataset(ds: MolACEDataset) -> tuple[list, np.ndarray, np.ndarray, np.ndarray]:
-    """Load a MoleculeACE dataset, parse with RDKit, drop unparseable rows.
-
-    Returns (mols, y, cliff_mol_mask, split_str_array). Index alignment:
-    mols[i] corresponds to y[i], cliff_mol_mask[i], split_str_array[i].
-    """
+def _load_dataset(ds: MolACEDataset) -> tuple[list, np.ndarray]:
+    """Return (mols, y) with rows where SMILES failed dropped."""
     df = load_molace(ds, CACHE_MOLACE)
     smis = df["smiles"].to_list()
-    parsed = [(s, MolFromSmiles(s), i) for i, s in enumerate(smis)]
-    keep = [(m, i) for s, m, i in parsed if m is not None]
+    parsed = [(MolFromSmiles(s), i) for i, s in enumerate(smis)]
+    keep = [(m, i) for m, i in parsed if m is not None]
     mols = [m for m, _ in keep]
     keep_idx = np.array([i for _, i in keep])
     y = df["y"].to_numpy()[keep_idx]
-    cliff = df["cliff_mol"].to_numpy()[keep_idx]
-    split = np.array(df["split"].to_list())[keep_idx]
     if len(mols) < df.height:
-        logger.info(
-            f"  parsed {len(mols)}/{df.height} mols; "
-            f"dropped {df.height - len(mols)}"
-        )
-    return mols, y, cliff, split
+        logger.info(f"  parsed {len(mols)}/{df.height} mols")
+    return mols, y
 
 
-def _load_or_compute_candidates(
+def _load_or_compute_cliffs(
     ds: MolACEDataset,
     mols: list,
     y: np.ndarray,
-    cliff_threshold: float = 2.0,
-    mcs_min_fraction: float = 0.7,
     use_cache: bool = True,
-) -> list[MCSCliffCandidate]:
-    """Build (or load from cache) the MCS-verified cliff candidate set."""
-    cache_path = CACHE_CANDIDATES / f"{ds.name}_dy{cliff_threshold}_mcs{mcs_min_fraction}.pkl"
+) -> list[CliffPair]:
+    cache_path = CACHE_CLIFFS / f"{ds.name}.pkl"
     if use_cache and cache_path.exists():
         with open(cache_path, "rb") as fh:
-            cands = pickle.load(fh)
-        logger.info(f"loaded {len(cands)} cached candidates from {cache_path}")
-        return cands
-    cands = find_mcs_cliff_candidates(
-        mols, y,
-        cliff_threshold=cliff_threshold,
-        mcs_min_fraction=mcs_min_fraction,
-    )
+            pairs = pickle.load(fh)
+        logger.info(f"loaded {len(pairs)} cliff pairs from {cache_path}")
+        return pairs
+    pairs = find_cliff_pairs(mols, y)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cache_path, "wb") as fh:
-        pickle.dump(cands, fh)
-    logger.info(f"cached {len(cands)} candidates to {cache_path}")
-    return cands
+        pickle.dump(pairs, fh)
+    logger.info(f"cached {len(pairs)} cliff pairs to {cache_path}")
+    return pairs
 
 
-def main(k: int, cliff_threshold: float) -> None:
+def main(use_cache: bool = True) -> None:
     device = _device()
     logger.info(f"using device={device}")
 
     chemeleon = CheMeleonFingerprint(device=device)
     mist_28m = MISTFingerprint(model_id=MIST_28M, device=device)
 
-    ff_by_dataset: dict[str, dict[str, FalseFriendResult]] = {}
-    rmse_by_dataset: dict[str, dict[str, CliffRMSEResult]] = {}
-    catch_by_dataset: dict[str, dict[str, CatchRateResult]] = {}
+    sims_by_dataset: dict[str, dict[str, CliffSimResult]] = {}
 
     for ds in DATASETS:
         logger.info(f"=== {ds.name} ({ds.target_label}) ===")
-        mols, y, cliff, split = _load_dataset(ds)
+        mols, y = _load_dataset(ds)
+        cliff_pairs = _load_or_compute_cliffs(ds, mols, y, use_cache=use_cache)
+
+        if not cliff_pairs:
+            logger.warning(f"{ds.name}: no cliff pairs found, skipping")
+            continue
+
         fps = _build_fps(mols, chemeleon, mist_28m)
+        sims = cliff_similarity_for_all(fps, cliff_pairs)
+        sims_by_dataset[ds.target_label] = sims
 
-        ff = false_friend_rate_for_all(
-            fps, y, k=k, cliff_threshold=cliff_threshold,
-        )
-        ff_by_dataset[ds.target_label] = ff
+        examples = select_cliff_examples_for_all(fps, cliff_pairs)
 
-        train_mask = split == "train"
-        test_mask = split == "test"
-        cliff_test_mask = test_mask & cliff
-        if not cliff_test_mask.any():
-            logger.warning(
-                f"{ds.name} has no cliff test molecules; skipping kNN RMSE"
-            )
-            rmse_by_dataset[ds.target_label] = {}
-        else:
-            rmse = cliff_knn_rmse_for_all(
-                fps, y, train_mask, test_mask, cliff_test_mask, k=k,
-            )
-            rmse_by_dataset[ds.target_label] = rmse
-
-        # MCS-verified cliff candidates (cached) and catch metrics.
-        candidates = _load_or_compute_candidates(ds, mols, y)
-        catches_examples: dict[str, BestCatchExample | None] = (
-            best_cliff_catches_for_all(fps, candidates, k=k)
-        )
-        catch_rates = cliff_catch_rate_for_all(fps, candidates, k=k)
-        catch_by_dataset[ds.target_label] = catch_rates
-
-        # Per-dataset figures
-        plot_false_friend_bars(
-            ff,
-            out_path=FIG_DIR / f"01_false_friend_rate_{ds.name}.png",
+        plot_cliff_similarity_violins(
+            sims,
+            out_path=FIG_DIR / f"01_cliff_similarity_violins_{ds.name}.png",
             title=(
-                f"False-friend rate at top-k={k} \u2014 {ds.target_label} "
-                f"({ds.target_class}, n={len(mols)})"
+                f"Cliff-pair similarity distribution \u2014 {ds.target_label} "
+                f"({ds.target_class}, n={len(cliff_pairs)} cliff pairs)"
             ),
         )
-        plot_neighbor_dy_violins(
-            ff,
-            out_path=FIG_DIR / f"02_neighbor_dy_violins_{ds.name}.png",
+        plot_cliff_examples(
+            examples, mols=mols, y=y,
+            out_path=FIG_DIR / f"02_cliff_examples_{ds.name}.png",
             title=(
-                f"|\u0394y| within top-k={k} neighbors \u2014 {ds.target_label}"
+                f"Cliff examples per fingerprint \u2014 {ds.target_label}"
             ),
         )
-        if rmse_by_dataset[ds.target_label]:
-            plot_cliff_rmse_bars(
-                rmse_by_dataset[ds.target_label],
-                out_path=FIG_DIR / f"03_cliff_rmse_{ds.name}.png",
-                title=(
-                    f"kNN regression cliff vs non-cliff RMSE \u2014 "
-                    f"{ds.target_label} (k={k})"
-                ),
-            )
 
-        # Worst false friend + best catch example figure (D3 only for now;
-        # extend to all targets in a follow-up).
-        if ds is D3_DOPAMINE:
-            ff_examples = worst_false_friends_for_all(fps, y, k=k)
-            plot_cliff_examples(
-                ff_examples, catches_examples, mols=mols, y=y,
-                out_path=FIG_DIR / f"05_cliff_examples_{ds.name}.png",
-                title=(
-                    f"Cliff examples per fingerprint \u2014 "
-                    f"{ds.target_label} (top-k={k}, "
-                    f"{len(candidates)} MCS-verified candidates)"
-                ),
-            )
-
-        # Free fingerprint memory before the next dataset
         del fps
 
     # Cross-dataset summary
-    plot_false_friend_summary(
-        ff_by_dataset,
-        out_path=FIG_DIR / "04_false_friend_summary.png",
+    plot_cliff_blind_summary(
+        sims_by_dataset,
+        threshold=0.7,
+        out_path=FIG_DIR / "03_cliff_blind_summary.png",
         title=(
-            f"False-friend rate at top-k={k}, "
-            f"cliff threshold |\u0394y| \u2265 {cliff_threshold}"
-        ),
-    )
-    plot_catch_rate_summary(
-        catch_by_dataset,
-        out_path=FIG_DIR / "06_catch_rate_summary.png",
-        title=(
-            f"MCS-cliff catch rate at top-k={k} "
-            f"(same Bemis-Murcko scaffold + |\u0394y|\u22652.0 + MCS\u22650.7)"
+            "Cliff-blind rate across datasets "
+            "(graph-distance \u2264 5, |\u0394pKi| \u2265 2.0)"
         ),
     )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--k", type=int, default=5, help="neighbors per query")
     parser.add_argument(
-        "--threshold", type=float, default=DEFAULT_CLIFF_THRESHOLD,
-        help="|Delta y| (in pKi units) above which a neighbor is a cliff",
+        "--no-cache", action="store_true",
+        help="ignore cached cliff candidates and recompute",
     )
     args = parser.parse_args()
-    main(k=args.k, cliff_threshold=args.threshold)
+    main(use_cache=not args.no_cache)

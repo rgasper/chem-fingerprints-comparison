@@ -1,136 +1,84 @@
-"""Plots for the activity-cliff probes.
+"""Plots for graph-distance-defined activity-cliff analysis.
 
-Three figure types per dataset:
+Three figure types:
 
-- `plot_false_friend_bars`: false-friend rate at top-k per fingerprint.
-  Headline figure. Lower bars = fingerprint's neighborhoods have fewer
-  cliff pairs hiding in them.
-- `plot_neighbor_dy_violins`: distribution of |Delta y| across each
-  fingerprint's top-k neighbor pairs. Reveals the tail behavior - a
-  fingerprint with a low rate but a heavy upper tail is still hosting
-  some big cliffs.
-- `plot_cliff_rmse_bars`: kNN regression RMSE on cliff vs non-cliff test
-  molecules, with the penalty (cliff - non-cliff) annotated. Mirrors the
-  MoleculeACE benchmark paper's evaluation.
-
-Plus one cross-dataset summary:
-
-- `plot_false_friend_summary`: heatmap of false-friend rate
-  (datasets x fingerprints).
+- `plot_cliff_similarity_violins`: distribution of FP similarities over
+  cliff pairs, one violin per fingerprint. Lower violins = better cliff
+  resolution. The headline figure.
+- `plot_cliff_examples`: per-fingerprint molecule-pair illustrations.
+  Two columns: most cliff-blind pair (highest similarity) on the left,
+  least cliff-blind (lowest similarity) on the right. Gives visual
+  intuition for what each FP misses and catches.
+- `plot_cliff_blind_summary`: cross-dataset heatmap of P(sim >= 0.7)
+  per fingerprint per dataset.
 """
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
 from loguru import logger
-from matplotlib.patches import Patch
+from rdkit.Chem import Mol
+from rdkit.Chem.Draw import rdMolDraw2D
 from typeguard import typechecked
 
 from fingerprints.clustering.cliffs import (
-    CatchRateResult,
-    CliffRMSEResult,
-    FalseFriendResult,
+    CliffExamplePair,
+    CliffSimResult,
 )
 from fingerprints.plots.groupings import grouped_order, style_for
 
 
-@typechecked
-def plot_false_friend_bars(
-    results: dict[str, FalseFriendResult],
-    out_path: Path,
-    title: str = "",
-    figsize: tuple[float, float] = (12.0, 6.5),
-    dpi: int = 200,
-) -> Path:
-    """Bar chart of false-friend rate per fingerprint.
+def _draw_pair_image(
+    mol_a: Mol,
+    mol_b: Mol,
+    size: tuple[int, int] = (700, 260),
+) -> np.ndarray:
+    half_w = size[0] // 2
+    h = size[1]
 
-    A 'false friend' is a top-k neighbor pair with |Delta y| above the
-    cliff threshold. Lower is better.
-    """
-    short_ids = list(results.keys())
-    order = grouped_order(short_ids)
-    short_ids = [short_ids[i] for i in order]
+    def _draw_one(mol: Mol) -> Image.Image:
+        drawer = rdMolDraw2D.MolDraw2DCairo(half_w, h)
+        drawer.drawOptions().clearBackground = True
+        drawer.DrawMolecule(mol)
+        drawer.FinishDrawing()
+        return Image.open(io.BytesIO(drawer.GetDrawingText())).convert("RGB")
 
-    n = len(short_ids)
-    vals = np.zeros(n)
-    names: list[str] = []
-    styles: list[tuple[str, str, str]] = []
-    k = next(iter(results.values())).k
-    threshold = next(iter(results.values())).cliff_threshold
-    for i, sid in enumerate(short_ids):
-        r = results[sid]
-        vals[i] = r.false_friend_rate
-        names.append(r.name)
-        styles.append(style_for(sid, i))
+    img_a = _draw_one(mol_a)
+    img_b = _draw_one(mol_b)
+    composite = Image.new("RGB", size, "white")
+    composite.paste(img_a, (0, 0))
+    composite.paste(img_b, (half_w, 0))
+    return np.asarray(composite)
 
-    fig, ax = plt.subplots(figsize=figsize)
-    x = np.arange(n)
-    width = 0.7
-    for i, (group, color, hatch) in enumerate(styles):
-        ax.bar(
-            x[i], vals[i],
-            width=width, color=color, edgecolor="black",
-            linewidth=0.6, hatch=hatch,
-        )
-        ax.text(
-            x[i], vals[i] + 0.005, f"{vals[i]:.2f}",
-            ha="center", va="bottom", fontsize=9,
-        )
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=9)
-    ax.set_ylabel(
-        f"false-friend rate at top-k={k}\n(fraction of neighbors with |\u0394y| \u2265 {threshold})",
-        fontsize=11,
-    )
-    ymax = max(float(vals.max()) * 1.25, 0.05)
-    ax.set_ylim(0, ymax)
-    ax.grid(axis="y", linestyle=":", alpha=0.5)
-
-    legend_handles, legend_labels, seen = [], [], set()
-    for fi, (group, color, hatch) in enumerate(styles):
-        if group in seen:
-            continue
-        seen.add(group)
-        legend_handles.append(
-            Patch(facecolor=color, edgecolor="black", label=group)
-        )
-        legend_labels.append(group)
-    fig.legend(
-        legend_handles, legend_labels,
-        loc="lower center", ncol=len(legend_handles),
-        bbox_to_anchor=(0.5, -0.02), frameon=False, fontsize=10,
-    )
-
-    if title:
-        ax.set_title(title, fontsize=13)
-
-    fig.tight_layout(rect=(0, 0.03, 1.0, 0.97 if title else 1.0))
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    logger.info(f"wrote {out_path}")
-    return out_path
+def _format_fold(delta_y: float) -> str:
+    fold = 10 ** delta_y
+    if fold >= 1000:
+        return f"{fold/1000:.0f},000\u00d7"
+    return f"{fold:.0f}\u00d7"
 
 
 @typechecked
-def plot_neighbor_dy_violins(
-    results: dict[str, FalseFriendResult],
+def plot_cliff_similarity_violins(
+    results: dict[str, CliffSimResult],
     out_path: Path,
     title: str = "",
     figsize: tuple[float, float] = (13.0, 6.5),
     dpi: int = 200,
 ) -> Path:
-    """Violin plot of |Delta y| distributions across each fingerprint's
-    top-k neighbor pairs.
+    """Distribution of cliff-pair similarities per fingerprint.
 
-    The cliff threshold is drawn as a horizontal dashed line; portions of
-    the violin above it are the false-friend region. A short, bottom-
-    weighted violin = the fingerprint's neighborhoods are tight in
-    activity. A heavy upper tail = it harbors cliffs.
+    Each violin shows the distribution of FP similarity scores across
+    activity cliff pairs (graph-distance-defined cliffs, no FP involved
+    in the cliff definition). Lower = better cliff resolution. The
+    horizontal dashed line at 0.7 marks a conventional Tanimoto
+    "very similar" threshold; bars / violins above it represent
+    "cliff-blind" cases.
     """
     short_ids = list(results.keys())
     order = grouped_order(short_ids)
@@ -140,13 +88,13 @@ def plot_neighbor_dy_violins(
     data: list[np.ndarray] = []
     names: list[str] = []
     styles: list[tuple[str, str, str]] = []
-    threshold = next(iter(results.values())).cliff_threshold
-    k = next(iter(results.values())).k
+    medians: list[float] = []
     for i, sid in enumerate(short_ids):
         r = results[sid]
-        data.append(r.delta_y)
+        data.append(r.sims)
         names.append(r.name)
         styles.append(style_for(sid, i))
+        medians.append(r.median_sim)
 
     fig, ax = plt.subplots(figsize=figsize)
     parts = ax.violinplot(
@@ -163,17 +111,24 @@ def plot_neighbor_dy_violins(
         parts["cmedians"].set_color("black")
         parts["cmedians"].set_linewidth(1.2)
 
+    # Annotate the median above each violin
+    for xi, med in enumerate(medians):
+        ax.text(
+            xi, med + 0.04, f"{med:.2f}",
+            ha="center", va="bottom", fontsize=9, fontweight="bold",
+        )
+
     ax.axhline(
-        threshold, color="red", linestyle="--", linewidth=1.2,
-        label=f"cliff threshold = {threshold} ({int(10**threshold)}\u00d7 potency)",
+        0.7, color="red", linestyle="--", linewidth=1.0,
+        label="cliff-blind threshold (sim \u2265 0.7)",
     )
 
     ax.set_xticks(np.arange(n))
     ax.set_xticklabels(names, rotation=35, ha="right", fontsize=9)
-    ax.set_ylabel(f"|\u0394y| within top-k={k} neighbors (pKi units)", fontsize=11)
-    ax.set_ylim(0, max(threshold * 3.5, float(np.percentile(np.concatenate(data), 99)) * 1.1))
+    ax.set_ylabel("fingerprint similarity over cliff pairs", fontsize=11)
+    ax.set_ylim(0, 1.05)
     ax.grid(axis="y", linestyle=":", alpha=0.5)
-    ax.legend(loc="upper right", fontsize=10, framealpha=0.95)
+    ax.legend(loc="upper right", fontsize=9, framealpha=0.95)
 
     if title:
         ax.set_title(title, fontsize=13)
@@ -186,87 +141,157 @@ def plot_neighbor_dy_violins(
     return out_path
 
 
-@typechecked
-def plot_cliff_rmse_bars(
-    results: dict[str, CliffRMSEResult],
-    out_path: Path,
-    title: str = "",
-    figsize: tuple[float, float] = (13.0, 6.5),
-    dpi: int = 200,
-) -> Path:
-    """Grouped bar chart: rmse_noncliff vs rmse_cliff per fingerprint.
-
-    The penalty (cliff - non-cliff) is annotated above each pair.
-    """
-    short_ids = list(results.keys())
-    order = grouped_order(short_ids)
-    short_ids = [short_ids[i] for i in order]
-
-    n = len(short_ids)
-    rmse_nc = np.zeros(n)
-    rmse_c = np.zeros(n)
-    names: list[str] = []
-    styles: list[tuple[str, str, str]] = []
-    k = next(iter(results.values())).k
-    for i, sid in enumerate(short_ids):
-        r = results[sid]
-        rmse_nc[i] = r.rmse_noncliff
-        rmse_c[i] = r.rmse_cliff
-        names.append(r.name)
-        styles.append(style_for(sid, i))
-
-    fig, ax = plt.subplots(figsize=figsize)
-    x = np.arange(n)
-    width = 0.38
-    # Two bars per fp: lighter = non-cliff, full color = cliff.
-    for i, (group, color, hatch) in enumerate(styles):
-        ax.bar(
-            x[i] - width / 2, rmse_nc[i], width=width,
-            color=color, alpha=0.45, edgecolor="black", linewidth=0.6,
-        )
-        ax.bar(
-            x[i] + width / 2, rmse_c[i], width=width,
-            color=color, edgecolor="black", linewidth=0.6, hatch=hatch,
-        )
-        # Penalty (signed) above the cliff bar
-        penalty = rmse_c[i] - rmse_nc[i]
-        sign = "+" if penalty >= 0 else "\u2212"
-        y_top = max(rmse_nc[i], rmse_c[i])
-        ax.text(
-            x[i], y_top + 0.03, f"\u0394 {sign}{abs(penalty):.2f}",
-            ha="center", va="bottom", fontsize=8, color="black",
-        )
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=9)
-    ax.set_ylabel(f"kNN regression RMSE on test set (k={k})", fontsize=11)
-    ax.grid(axis="y", linestyle=":", alpha=0.5)
-
-    # Custom legend explaining bar pairs + group colors
-    bar_legend = [
-        Patch(facecolor="#888888", alpha=0.45, edgecolor="black", label="non-cliff test mols"),
-        Patch(facecolor="#888888", edgecolor="black", label="cliff test mols"),
-    ]
-    seen, group_legend = set(), []
-    for fi, (group, color, hatch) in enumerate(styles):
-        if group in seen:
-            continue
-        seen.add(group)
-        group_legend.append(
-            Patch(facecolor=color, edgecolor="black", label=group)
-        )
-
-    ax.legend(handles=bar_legend, loc="upper left", fontsize=9, framealpha=0.95)
-    fig.legend(
-        handles=group_legend,
-        loc="lower center", ncol=len(group_legend),
-        bbox_to_anchor=(0.5, -0.02), frameon=False, fontsize=10,
+def _draw_pair_cell(
+    ax_mol,
+    ax_metrics,
+    mol_a: Mol,
+    mol_b: Mol,
+    pki_a: float,
+    pki_b: float,
+    metric_lines: list[tuple[str, bool]],
+) -> None:
+    img = _draw_pair_image(mol_a, mol_b)
+    ax_mol.imshow(img)
+    ax_mol.set_xticks([])
+    ax_mol.set_yticks([])
+    for spine in ax_mol.spines.values():
+        spine.set_edgecolor("#cccccc")
+        spine.set_linewidth(0.5)
+    ax_mol.text(
+        0.25, -0.04, f"pKi = {pki_a:.2f}",
+        transform=ax_mol.transAxes,
+        fontsize=9, ha="center", va="top",
+    )
+    ax_mol.text(
+        0.75, -0.04, f"pKi = {pki_b:.2f}",
+        transform=ax_mol.transAxes,
+        fontsize=9, ha="center", va="top",
     )
 
-    if title:
-        ax.set_title(title, fontsize=13)
+    ax_metrics.axis("off")
+    n_lines = len(metric_lines)
+    for li, (line, bold) in enumerate(metric_lines):
+        y_pos = 0.85 - li * (0.7 / max(n_lines - 1, 1))
+        ax_metrics.text(
+            0.0, y_pos, line,
+            transform=ax_metrics.transAxes,
+            fontsize=8.5, ha="left", va="center",
+            fontweight="bold" if bold else "normal",
+            color="black" if bold else "#444444",
+        )
 
-    fig.tight_layout(rect=(0, 0.03, 1.0, 0.97 if title else 1.0))
+
+@typechecked
+def plot_cliff_examples(
+    examples: dict[str, tuple[CliffExamplePair, CliffExamplePair]],
+    mols: list[Mol],
+    y: np.ndarray,
+    out_path: Path,
+    title: str = "",
+    row_height: float = 1.7,
+    dpi: int = 200,
+) -> Path:
+    """8-row x 2-column figure: most cliff-blind pair on left, least on right.
+
+    'Most cliff-blind' = the cliff pair this FP scored highest. 'Least
+    cliff-blind' = the cliff pair this FP scored lowest. Both pairs are
+    real activity cliffs from the dataset (graph-distance <= 5,
+    |delta pKi| >= 2.0).
+    """
+    short_ids = list(examples.keys())
+    order = grouped_order(short_ids)
+    short_ids = [short_ids[i] for i in order]
+    n_rows = len(short_ids)
+
+    fig_w = 18.0
+    fig_h = row_height * n_rows + 0.8
+    fig = plt.figure(figsize=(fig_w, fig_h))
+
+    gs = fig.add_gridspec(
+        n_rows + 1, 5,
+        width_ratios=(1.4, 4.2, 1.3, 4.2, 1.3),
+        height_ratios=(0.4,) + (1.0,) * n_rows,
+        hspace=0.18, wspace=0.05,
+    )
+
+    # Headers
+    ax_h_label = fig.add_subplot(gs[0, 0])
+    ax_h_label.axis("off")
+    ax_h_most = fig.add_subplot(gs[0, 1:3])
+    ax_h_most.axis("off")
+    ax_h_most.text(
+        0.5, 0.0, "Most cliff-blind  (highest similarity on a true cliff)",
+        transform=ax_h_most.transAxes,
+        fontsize=12, fontweight="bold", ha="center", va="bottom",
+        color="#9c2d2d",
+    )
+    ax_h_least = fig.add_subplot(gs[0, 3:5])
+    ax_h_least.axis("off")
+    ax_h_least.text(
+        0.5, 0.0, "Least cliff-blind  (lowest similarity on a true cliff)",
+        transform=ax_h_least.transAxes,
+        fontsize=12, fontweight="bold", ha="center", va="bottom",
+        color="#1f5c2e",
+    )
+
+    for ri, sid in enumerate(short_ids, start=1):
+        most, least = examples[sid]
+        group, color, _ = style_for(sid)
+
+        ax_label = fig.add_subplot(gs[ri, 0])
+        ax_label.axis("off")
+        ax_label.text(
+            0.05, 0.55, most.name,
+            transform=ax_label.transAxes,
+            fontsize=11, fontweight="bold", color=color,
+            ha="left", va="center",
+        )
+        ax_label.text(
+            0.05, 0.30, group,
+            transform=ax_label.transAxes,
+            fontsize=8.5, color=color, ha="left", va="center",
+        )
+
+        # Most cliff-blind
+        ax_m_mol = fig.add_subplot(gs[ri, 1])
+        ax_m_metrics = fig.add_subplot(gs[ri, 2])
+        m_lines = [
+            (f"FP similarity = {most.similarity:.2f}", True),
+            (f"|\u0394pKi| = {most.delta_y:.2f}", False),
+            (f"({_format_fold(most.delta_y)} potency)", False),
+            (f"graph distance = {most.graph_distance}", False),
+        ]
+        _draw_pair_cell(
+            ax_m_mol, ax_m_metrics,
+            mols[most.i], mols[most.j],
+            float(y[most.i]), float(y[most.j]),
+            m_lines,
+        )
+
+        # Least cliff-blind
+        ax_l_mol = fig.add_subplot(gs[ri, 3])
+        ax_l_metrics = fig.add_subplot(gs[ri, 4])
+        l_lines = [
+            (f"FP similarity = {least.similarity:.2f}", True),
+            (f"|\u0394pKi| = {least.delta_y:.2f}", False),
+            (f"({_format_fold(least.delta_y)} potency)", False),
+            (f"graph distance = {least.graph_distance}", False),
+        ]
+        _draw_pair_cell(
+            ax_l_mol, ax_l_metrics,
+            mols[least.i], mols[least.j],
+            float(y[least.i]), float(y[least.j]),
+            l_lines,
+        )
+
+    if title:
+        fig.suptitle(title, fontsize=14, y=0.995)
+
+    fig.subplots_adjust(
+        top=0.96 if title else 0.99,
+        bottom=0.01,
+        left=0.005, right=0.995,
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -275,24 +300,25 @@ def plot_cliff_rmse_bars(
 
 
 @typechecked
-def plot_false_friend_summary(
-    rates_by_dataset: dict[str, dict[str, FalseFriendResult]],
+def plot_cliff_blind_summary(
+    results_by_dataset: dict[str, dict[str, CliffSimResult]],
     out_path: Path,
+    threshold: float = 0.7,
     title: str = "",
     figsize: tuple[float, float] = (12.0, 4.5),
     dpi: int = 200,
 ) -> Path:
-    """Heatmap summary: rows = datasets, cols = fingerprints.
+    """Heatmap summary: rows = datasets, cols = fingerprints, cells =
+    fraction of cliff pairs scored above `threshold` similarity.
 
-    Cells show false-friend rate. Lower (cooler) is better. Useful as a
-    one-glance summary across the three datasets.
+    Higher = more cliff-blind = worse. Magma colormap (inverted) so
+    high cliff-blindness shows as bright/light cells.
     """
-    datasets = list(rates_by_dataset.keys())
+    datasets = list(results_by_dataset.keys())
     if not datasets:
-        raise ValueError("rates_by_dataset is empty")
+        raise ValueError("results_by_dataset is empty")
 
-    # Use the column order from the first dataset (all should share it)
-    first = rates_by_dataset[datasets[0]]
+    first = results_by_dataset[datasets[0]]
     short_ids = list(first.keys())
     order = grouped_order(short_ids)
     short_ids = [short_ids[i] for i in order]
@@ -300,84 +326,22 @@ def plot_false_friend_summary(
     mat = np.zeros((len(datasets), len(short_ids)))
     for ri, ds in enumerate(datasets):
         for ci, sid in enumerate(short_ids):
-            mat[ri, ci] = rates_by_dataset[ds][sid].false_friend_rate
+            r = results_by_dataset[ds][sid]
+            mat[ri, ci] = (
+                r.cliff_blind_rate_07 if threshold == 0.7
+                else r.cliff_blind_rate_05 if threshold == 0.5
+                else float((r.sims >= threshold).mean())
+            )
 
     fig, ax = plt.subplots(figsize=figsize)
     im = ax.imshow(
         mat, cmap="magma_r", aspect="auto",
-        vmin=0.0, vmax=float(mat.max()) * 1.05,
-    )
-    for ri in range(mat.shape[0]):
-        for ci in range(mat.shape[1]):
-            v = mat[ri, ci]
-            color = "white" if v > 0.55 * mat.max() else "black"
-            ax.text(
-                ci, ri, f"{v:.2f}",
-                ha="center", va="center", fontsize=10, color=color,
-            )
-
-    ax.set_xticks(np.arange(len(short_ids)))
-    ax.set_yticks(np.arange(len(datasets)))
-    ax.set_xticklabels(
-        [first[sid].name for sid in short_ids],
-        rotation=35, ha="right", fontsize=9,
-    )
-    ax.set_yticklabels(datasets, fontsize=10)
-    for tick, sid in zip(ax.get_xticklabels(), short_ids):
-        _, color, _ = style_for(sid)
-        tick.set_color(color)
-
-    cbar = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
-    cbar.set_label("false-friend rate (lower = better)", fontsize=10)
-
-    if title:
-        ax.set_title(title, fontsize=13, pad=10)
-
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    logger.info(f"wrote {out_path}")
-    return out_path
-
-
-@typechecked
-def plot_catch_rate_summary(
-    rates_by_dataset: dict[str, dict[str, CatchRateResult]],
-    out_path: Path,
-    title: str = "",
-    figsize: tuple[float, float] = (12.0, 4.5),
-    dpi: int = 200,
-) -> Path:
-    """Heatmap summary of cliff catch rate: rows = datasets, cols = fingerprints.
-
-    Catch rate = fraction of MCS-verified cliff candidates the fingerprint
-    correctly placed outside both molecules' top-k neighbor sets. Higher
-    (warmer) is better - the dual of the false-friend rate.
-    """
-    datasets = list(rates_by_dataset.keys())
-    if not datasets:
-        raise ValueError("rates_by_dataset is empty")
-
-    first = rates_by_dataset[datasets[0]]
-    short_ids = list(first.keys())
-    order = grouped_order(short_ids)
-    short_ids = [short_ids[i] for i in order]
-
-    mat = np.zeros((len(datasets), len(short_ids)))
-    for ri, ds in enumerate(datasets):
-        for ci, sid in enumerate(short_ids):
-            mat[ri, ci] = rates_by_dataset[ds][sid].catch_rate
-
-    fig, ax = plt.subplots(figsize=figsize)
-    im = ax.imshow(
-        mat, cmap="magma", aspect="auto",
         vmin=0.0, vmax=1.0,
     )
     for ri in range(mat.shape[0]):
         for ci in range(mat.shape[1]):
             v = mat[ri, ci]
-            color = "white" if v < 0.5 else "black"
+            color = "white" if v > 0.55 else "black"
             ax.text(
                 ci, ri, f"{v:.2f}",
                 ha="center", va="center", fontsize=10, color=color,
@@ -390,7 +354,7 @@ def plot_catch_rate_summary(
         rotation=35, ha="right", fontsize=9,
     )
     yticklabels = [
-        f"{ds}\n(n={next(iter(rates_by_dataset[ds].values())).n_candidates} cliffs)"
+        f"{ds}\n(n={results_by_dataset[ds][short_ids[0]].n_pairs} cliffs)"
         for ds in datasets
     ]
     ax.set_yticklabels(yticklabels, fontsize=9)
@@ -399,7 +363,10 @@ def plot_catch_rate_summary(
         tick.set_color(color)
 
     cbar = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
-    cbar.set_label("catch rate (higher = better)", fontsize=10)
+    cbar.set_label(
+        f"cliff-blind rate: P(similarity \u2265 {threshold})  (lower = better)",
+        fontsize=10,
+    )
 
     if title:
         ax.set_title(title, fontsize=13, pad=10)
