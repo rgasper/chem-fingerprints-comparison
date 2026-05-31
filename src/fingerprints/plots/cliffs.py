@@ -30,6 +30,7 @@ from matplotlib.patches import Patch
 from typeguard import typechecked
 
 from fingerprints.clustering.cliffs import (
+    CatchRateResult,
     CliffRMSEResult,
     FalseFriendResult,
 )
@@ -328,6 +329,77 @@ def plot_false_friend_summary(
 
     cbar = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
     cbar.set_label("false-friend rate (lower = better)", fontsize=10)
+
+    if title:
+        ax.set_title(title, fontsize=13, pad=10)
+
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    logger.info(f"wrote {out_path}")
+    return out_path
+
+
+@typechecked
+def plot_catch_rate_summary(
+    rates_by_dataset: dict[str, dict[str, CatchRateResult]],
+    out_path: Path,
+    title: str = "",
+    figsize: tuple[float, float] = (12.0, 4.5),
+    dpi: int = 200,
+) -> Path:
+    """Heatmap summary of cliff catch rate: rows = datasets, cols = fingerprints.
+
+    Catch rate = fraction of MCS-verified cliff candidates the fingerprint
+    correctly placed outside both molecules' top-k neighbor sets. Higher
+    (warmer) is better - the dual of the false-friend rate.
+    """
+    datasets = list(rates_by_dataset.keys())
+    if not datasets:
+        raise ValueError("rates_by_dataset is empty")
+
+    first = rates_by_dataset[datasets[0]]
+    short_ids = list(first.keys())
+    order = grouped_order(short_ids)
+    short_ids = [short_ids[i] for i in order]
+
+    mat = np.zeros((len(datasets), len(short_ids)))
+    for ri, ds in enumerate(datasets):
+        for ci, sid in enumerate(short_ids):
+            mat[ri, ci] = rates_by_dataset[ds][sid].catch_rate
+
+    fig, ax = plt.subplots(figsize=figsize)
+    im = ax.imshow(
+        mat, cmap="magma", aspect="auto",
+        vmin=0.0, vmax=1.0,
+    )
+    for ri in range(mat.shape[0]):
+        for ci in range(mat.shape[1]):
+            v = mat[ri, ci]
+            color = "white" if v < 0.5 else "black"
+            ax.text(
+                ci, ri, f"{v:.2f}",
+                ha="center", va="center", fontsize=10, color=color,
+            )
+
+    ax.set_xticks(np.arange(len(short_ids)))
+    ax.set_yticks(np.arange(len(datasets)))
+    ax.set_xticklabels(
+        [first[sid].name for sid in short_ids],
+        rotation=35, ha="right", fontsize=9,
+    )
+    yticklabels = [
+        f"{ds}\n(n={next(iter(rates_by_dataset[ds].values())).n_candidates} cliffs)"
+        for ds in datasets
+    ]
+    ax.set_yticklabels(yticklabels, fontsize=9)
+    for tick, sid in zip(ax.get_xticklabels(), short_ids):
+        _, color, _ = style_for(sid)
+        tick.set_color(color)
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.02)
+    cbar.set_label("catch rate (higher = better)", fontsize=10)
 
     if title:
         ax.set_title(title, fontsize=13, pad=10)

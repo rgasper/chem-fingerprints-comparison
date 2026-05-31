@@ -253,6 +253,321 @@ def worst_false_friends_for_all(
     return {sid: worst_false_friend(fp, y, k=k) for sid, fp in fps.items()}
 
 
+# ---------------------------------------------------------------------------
+# MCS-defined cliff catches
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MCSCliffCandidate:
+    """One verified cliff pair (i, j).
+
+    Attributes:
+        i, j: dataset indices of the two molecules (i < j).
+        mcs_atoms: number of atoms in the maximum common substructure.
+        mcs_fraction: mcs_atoms / min(heavy_atoms_i, heavy_atoms_j); the
+            fraction of the smaller molecule covered by the MCS.
+        delta_y: |y_i - y_j| in pKi / pEC50 units.
+        shared_scaffold: the canonical Bemis-Murcko scaffold SMILES that
+            both molecules share. Empty string if the molecules have no
+            ring system (the candidate set excludes acyclic molecules).
+    """
+
+    i: int
+    j: int
+    mcs_atoms: int
+    mcs_fraction: float
+    delta_y: float
+    shared_scaffold: str
+
+
+def _mcs_check_one(
+    mol_i, mol_j, ha_min: int, mcs_min_fraction: float, timeout: int,
+) -> tuple[int, float] | None:
+    """Worker function for parallel MCS verification.
+
+    Returns (mcs_atoms, mcs_fraction) if the pair passes the threshold,
+    None otherwise. Defined at module scope so joblib can pickle it.
+    """
+    from rdkit.Chem import rdFMCS
+
+    res = rdFMCS.FindMCS(
+        [mol_i, mol_j], timeout=timeout, completeRingsOnly=True,
+    )
+    if res.canceled or ha_min == 0:
+        return None
+    frac = res.numAtoms / ha_min
+    if frac < mcs_min_fraction:
+        return None
+    return int(res.numAtoms), float(frac)
+
+
+@typechecked
+def find_mcs_cliff_candidates(
+    mols: list,
+    y: np.ndarray,
+    cliff_threshold: float = 2.0,
+    mcs_min_fraction: float = 0.7,
+    mcs_timeout: int = 2,
+    n_jobs: int = -1,
+) -> list[MCSCliffCandidate]:
+    """Build the MCS-verified cliff candidate set for one dataset.
+
+    Pipeline (each stage prunes hard before the next):
+
+    1. **Activity-gap filter**: keep pairs (i, j) with |y_i - y_j| >= cliff_threshold.
+    2. **Same-scaffold filter**: keep pairs where both molecules have the
+       same Bemis-Murcko scaffold. Acyclic molecules are excluded.
+    3. **Heavy-atom compatibility**: keep pairs whose heavy-atom counts
+       are within 60% of each other.
+    4. **MCS verification (parallel)**: keep pairs where MCS atoms /
+       min(heavy_atoms) >= `mcs_min_fraction`.
+
+    The whole construction is fingerprint-agnostic: same-scaffold + MCS
+    are pure graph properties of the molecules. This means the candidate
+    set is a fair external test bed for asking "which fingerprints catch
+    these cliffs?" without privileging any one fingerprint's similarity
+    notion.
+
+    Returns the list of verified candidates.
+    """
+    from rdkit.Chem.Scaffolds.MurckoScaffold import MurckoScaffoldSmiles
+    from joblib import Parallel, delayed
+
+    n = len(mols)
+    if y.shape[0] != n:
+        raise ValueError(f"y has {y.shape[0]} rows, mols has {n}")
+
+    # Stage 1: activity-gap filter (vectorized)
+    n_heavy = np.array([m.GetNumHeavyAtoms() for m in mols])
+    delta_y_full = np.abs(y[:, None] - y[None, :])
+    i_arr, j_arr = np.where(delta_y_full >= cliff_threshold)
+    mask = i_arr < j_arr
+    i_arr, j_arr = i_arr[mask], j_arr[mask]
+    logger.info(f"cliff candidates: |\u0394y|>={cliff_threshold} -> {len(i_arr)} pairs")
+
+    # Stage 2: same-scaffold filter
+    scaffolds: list[str] = []
+    for m in mols:
+        try:
+            s = MurckoScaffoldSmiles(mol=m, includeChirality=False) or ""
+        except (RuntimeError, ValueError):
+            s = ""
+        scaffolds.append(s)
+    scaffolds_arr = np.array(scaffolds)
+    same_scaff = (
+        (scaffolds_arr[i_arr] == scaffolds_arr[j_arr])
+        & (scaffolds_arr[i_arr] != "")
+    )
+    i_arr, j_arr = i_arr[same_scaff], j_arr[same_scaff]
+    logger.info(f"  + same Bemis-Murcko scaffold -> {len(i_arr)} pairs")
+
+    # Stage 3: heavy-atom compatibility
+    ha_min = np.minimum(n_heavy[i_arr], n_heavy[j_arr])
+    ha_max = np.maximum(n_heavy[i_arr], n_heavy[j_arr])
+    mask = ha_max > 0
+    mask &= (ha_min / np.maximum(ha_max, 1)) >= 0.6
+    i_arr, j_arr = i_arr[mask], j_arr[mask]
+    ha_min = ha_min[mask]
+    logger.info(f"  + heavy-atom compatibility -> {len(i_arr)} pairs")
+
+    if len(i_arr) == 0:
+        return []
+
+    # Stage 4: parallel MCS verification
+    args = [
+        (mols[int(i)], mols[int(j)], int(ha_min[k]), mcs_min_fraction, mcs_timeout)
+        for k, (i, j) in enumerate(zip(i_arr, j_arr))
+    ]
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(_mcs_check_one)(*a) for a in args
+    )
+
+    verified: list[MCSCliffCandidate] = []
+    for k, r in enumerate(results):
+        if r is None:
+            continue
+        mcs_atoms, frac = r
+        i, j = int(i_arr[k]), int(j_arr[k])
+        verified.append(
+            MCSCliffCandidate(
+                i=i, j=j,
+                mcs_atoms=mcs_atoms,
+                mcs_fraction=frac,
+                delta_y=float(abs(y[i] - y[j])),
+                shared_scaffold=scaffolds[i],
+            )
+        )
+    logger.info(
+        f"  + MCS verified (>= {mcs_min_fraction} fraction) -> {len(verified)}"
+    )
+    return verified
+
+
+@dataclass(frozen=True)
+class BestCatchExample:
+    """A single concrete cliff catch as a best-case illustration.
+
+    Attributes:
+        name: fingerprint display name
+        i, j: dataset indices of the two molecules.
+        delta_y: |y_i - y_j|
+        similarity: fingerprint similarity for this pair
+        mcs_fraction: structural similarity (MCS atoms / min heavy atoms)
+        rank_among_mol_i: where j sits in i's neighbor ordering (1 = nearest);
+            the catch test is satisfied iff this rank > k AND the symmetric
+            rank (where i sits in j's order) > k.
+    """
+
+    name: str
+    i: int
+    j: int
+    delta_y: float
+    similarity: float
+    mcs_fraction: float
+    rank_among_mol_i: int
+
+
+@typechecked
+def best_cliff_catch(
+    fp: FingerprintResult,
+    candidates: list[MCSCliffCandidate],
+    k: int = 5,
+) -> BestCatchExample | None:
+    """Among MCS-verified cliff pairs, the best catch for this fingerprint.
+
+    'Best' = the pair the FP would be most expected to put into top-k (so
+    rejecting it is the most impressive catch). Concretely: among pairs
+    the FP correctly excluded from both molecules' top-k neighbor sets,
+    pick the one with the highest FP similarity. That answers "what's
+    the closest call this FP correctly avoided?" rather than "what's
+    the biggest cliff this FP happened to catch?", which would surface
+    the same trivial example across all fingerprints.
+
+    Returns None if the fingerprint failed to catch any candidate.
+    """
+    if not candidates:
+        return None
+    arr, metric = _prepare_array(fp)
+    nn = NearestNeighbors(n_neighbors=k + 1, metric=metric)
+    nn.fit(arr)
+    _, idx = nn.kneighbors(arr)
+    idx_no_self = idx[:, 1:]
+
+    best: tuple[float, MCSCliffCandidate, float] | None = None  # (sim, cand, dist)
+    for cand in candidates:
+        i, j = cand.i, cand.j
+        i_topk = set(idx_no_self[i].tolist())
+        j_topk = set(idx_no_self[j].tolist())
+        if j in i_topk or i in j_topk:
+            continue
+        # Compute pair distance / similarity
+        if fp.kind == "binary":
+            a, b = arr[i], arr[j]
+            inter = int(np.sum(a & b))
+            union = int(np.sum(a | b))
+            d = 0.0 if union == 0 else 1.0 - inter / union
+        else:
+            from sklearn.metrics.pairwise import paired_distances
+            d = float(paired_distances(arr[i:i+1], arr[j:j+1], metric=metric)[0])
+        sim = 1.0 - d
+        if best is None or sim > best[0]:
+            best = (sim, cand, d)
+
+    if best is None:
+        return None
+    sim, cand, _ = best
+    return BestCatchExample(
+        name=fp.name,
+        i=cand.i, j=cand.j,
+        delta_y=cand.delta_y,
+        similarity=sim,
+        mcs_fraction=cand.mcs_fraction,
+        rank_among_mol_i=k + 1,
+    )
+
+
+@typechecked
+def best_cliff_catches_for_all(
+    fps: dict[str, FingerprintResult],
+    candidates: list[MCSCliffCandidate],
+    k: int = 5,
+) -> dict[str, BestCatchExample | None]:
+    return {sid: best_cliff_catch(fp, candidates, k=k) for sid, fp in fps.items()}
+
+
+@dataclass(frozen=True)
+class CatchRateResult:
+    """Aggregate catch-rate statistics for one fingerprint over a candidate set.
+
+    Attributes:
+        name: fingerprint display name
+        n_candidates: total MCS-verified cliff candidates considered
+        n_caught: count of candidates this FP placed outside both members'
+            top-k neighbor sets
+        catch_rate: n_caught / n_candidates
+        mean_delta_y_caught: average |Delta y| of caught candidates
+            (NaN if n_caught == 0)
+    """
+
+    name: str
+    n_candidates: int
+    n_caught: int
+    catch_rate: float
+    mean_delta_y_caught: float
+
+
+@typechecked
+def cliff_catch_rate(
+    fp: FingerprintResult,
+    candidates: list[MCSCliffCandidate],
+    k: int = 5,
+) -> CatchRateResult:
+    """Fraction of candidate cliffs the fingerprint correctly avoids in its
+    top-k neighborhoods (catches).
+    """
+    if not candidates:
+        return CatchRateResult(
+            name=fp.name, n_candidates=0, n_caught=0,
+            catch_rate=0.0, mean_delta_y_caught=float("nan"),
+        )
+    arr, metric = _prepare_array(fp)
+    nn = NearestNeighbors(n_neighbors=k + 1, metric=metric)
+    nn.fit(arr)
+    _, idx = nn.kneighbors(arr)
+    idx_no_self = idx[:, 1:]
+
+    n_caught = 0
+    sum_dy = 0.0
+    for cand in candidates:
+        i_topk = set(idx_no_self[cand.i].tolist())
+        j_topk = set(idx_no_self[cand.j].tolist())
+        if cand.j not in i_topk and cand.i not in j_topk:
+            n_caught += 1
+            sum_dy += cand.delta_y
+    rate = n_caught / len(candidates)
+    mean_dy = sum_dy / n_caught if n_caught > 0 else float("nan")
+    logger.info(
+        f"catch rate: {fp.name} k={k} -> {n_caught}/{len(candidates)} = "
+        f"{rate:.3f} (mean |\u0394y| caught = {mean_dy:.2f})"
+    )
+    return CatchRateResult(
+        name=fp.name,
+        n_candidates=len(candidates),
+        n_caught=n_caught,
+        catch_rate=rate,
+        mean_delta_y_caught=mean_dy,
+    )
+
+
+@typechecked
+def cliff_catch_rate_for_all(
+    fps: dict[str, FingerprintResult],
+    candidates: list[MCSCliffCandidate],
+    k: int = 5,
+) -> dict[str, CatchRateResult]:
+    return {sid: cliff_catch_rate(fp, candidates, k=k) for sid, fp in fps.items()}
+
+
 @typechecked
 def cliff_knn_rmse(
     fp: FingerprintResult,
