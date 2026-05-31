@@ -212,3 +212,84 @@ def scaffold_purity_for_all(
     ks: list[int],
 ) -> dict[str, ScaffoldPurityResult]:
     return {sid: scaffold_purity_for(fp, scaffolds, ks) for sid, fp in fps.items()}
+
+
+@typechecked
+def select_top_families(
+    scaffolds: list[str],
+    y: np.ndarray,
+    n_families: int = 2,
+    min_size: int = 15,
+    min_scaffold_atoms: int = 12,
+    exclude_acyclic: bool = True,
+) -> list[str]:
+    """Pick scaffolds with many members AND wide property range.
+
+    Ranks candidate scaffolds (those with >= min_size members and at least
+    min_scaffold_atoms heavy atoms) by size * property_range, where
+    property_range is max(y) - min(y); for binary y this collapses to 1 if
+    both classes are present, 0 otherwise, so the ranking effectively
+    becomes "biggest scaffold with class diversity."
+
+    The min_scaffold_atoms filter exists to skip generic ring catch-alls
+    like plain benzene (c1ccccc1, 6 heavy atoms) which match too many
+    unrelated molecules to count as a "chemical family."
+
+    For continuous y, this favors families that are both populous and
+    span a meaningful chunk of the property axis - ideal for showing how
+    each fingerprint distributes one chemical family across UMAP space.
+
+    Args:
+        scaffolds: per-molecule scaffold ids (parallel to y)
+        y: per-molecule property values
+        n_families: how many to return
+        min_size: minimum members for a scaffold to be considered
+        min_scaffold_atoms: minimum heavy atoms in the scaffold itself
+            (filters out generic single-ring scaffolds). Set to 0 to
+            disable.
+        exclude_acyclic: drop the synthetic acyclic bucket from candidates
+            (acyclic molecules are a heterogeneous catch-all, not a real
+            chemical family)
+
+    Returns:
+        list of scaffold ids, ordered by descending score
+    """
+    if len(scaffolds) != len(y):
+        raise ValueError(
+            f"scaffolds has {len(scaffolds)} entries, y has {len(y)}"
+        )
+
+    # group y values by scaffold
+    by_scaf: dict[str, list[float]] = {}
+    for s, yi in zip(scaffolds, y):
+        if s == "":
+            continue
+        if exclude_acyclic and s == ACYCLIC_BUCKET:
+            continue
+        if not np.isfinite(yi):
+            continue
+        by_scaf.setdefault(s, []).append(float(yi))
+
+    candidates: list[tuple[str, int, float, float]] = []
+    for s, vals in by_scaf.items():
+        size = len(vals)
+        if size < min_size:
+            continue
+        if min_scaffold_atoms > 0:
+            scaf_mol = MolFromSmiles(s)
+            if scaf_mol is None:
+                continue
+            if scaf_mol.GetNumHeavyAtoms() < min_scaffold_atoms:
+                continue
+        prange = float(max(vals) - min(vals))
+        score = size * prange
+        candidates.append((s, size, prange, score))
+
+    candidates.sort(key=lambda t: t[3], reverse=True)
+    chosen = candidates[:n_families]
+    for s, size, prange, score in chosen:
+        logger.info(
+            f"selected family: size={size} range={prange:.2f} "
+            f"score={score:.1f} scaffold={s}"
+        )
+    return [s for s, _, _, _ in chosen]
