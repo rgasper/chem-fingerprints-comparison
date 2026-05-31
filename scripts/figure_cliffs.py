@@ -29,6 +29,7 @@ from fingerprints.clustering.cliffs import (
     FalseFriendResult,
     cliff_knn_rmse_for_all,
     false_friend_rate_for_all,
+    worst_false_friends_for_all,
 )
 from fingerprints.data.molace import (
     D3_DOPAMINE,
@@ -47,6 +48,7 @@ from fingerprints.plots.cliffs import (
     plot_false_friend_summary,
     plot_neighbor_dy_violins,
 )
+from fingerprints.plots.cliff_examples import plot_worst_false_friend_examples
 
 
 CACHE_MOLACE = Path(".cache/molace")
@@ -150,6 +152,21 @@ def main(k: int, cliff_threshold: float) -> None:
                 title=(
                     f"kNN regression cliff vs non-cliff RMSE \u2014 "
                     f"{ds.target_label} (k={k})"
+                ),
+            )
+
+        # Worst-false-friend example figure (currently D3 only; will extend
+        # to all targets in a follow-up).
+        if ds is D3_DOPAMINE:
+            examples = worst_false_friends_for_all(fps, y, k=k)
+            plot_worst_false_friend_examples(
+                examples,
+                mols=mols,
+                y=y,
+                out_path=FIG_DIR / f"05_worst_false_friend_examples_{ds.name}.png",
+                title=(
+                    f"Worst false friends per fingerprint \u2014 "
+                    f"{ds.target_label} (top-k={k})"
                 ),
             )
 

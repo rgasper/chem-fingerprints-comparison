@@ -176,6 +176,83 @@ def false_friend_rate_for_all(
     }
 
 
+@dataclass(frozen=True)
+class FalseFriendExample:
+    """A single concrete false-friend pair selected as a worst-case illustration.
+
+    Attributes:
+        name: fingerprint display name
+        i: dataset index of the query molecule
+        j: dataset index of the neighbor molecule
+        delta_y: |y_i - y_j| in pKi units
+        similarity: fingerprint similarity for this pair
+            (Tanimoto for binary, cosine for continuous, both higher = more similar)
+        neighbor_rank: how close j was in i's neighbor ordering, in [1, k]
+            (1 means j was i's nearest neighbor, k means it was kth)
+    """
+
+    name: str
+    i: int
+    j: int
+    delta_y: float
+    similarity: float
+    neighbor_rank: int
+
+
+@typechecked
+def worst_false_friend(
+    fp: FingerprintResult,
+    y: np.ndarray,
+    k: int = 5,
+) -> FalseFriendExample:
+    """Find the single top-k neighbor pair with the largest |Delta y|.
+
+    For each molecule i we examine its k nearest neighbors in fingerprint
+    space; among the resulting (i, j) pairs we return the one where the
+    neighbor disagrees most strongly with i in activity. This is the
+    fingerprint's worst-case "I thought these were similar but they
+    aren't" example.
+    """
+    arr, metric = _prepare_array(fp)
+    n = arr.shape[0]
+    if y.shape[0] != n:
+        raise ValueError(f"y has {y.shape[0]} rows, fp has {n}")
+
+    nn = NearestNeighbors(n_neighbors=k + 1, metric=metric)
+    nn.fit(arr)
+    dists, idx = nn.kneighbors(arr)
+    dists = dists[:, 1:]  # drop self
+    idx = idx[:, 1:]
+
+    delta_y = np.abs(y[:, None] - y[idx])  # (n, k)
+    flat_pos = int(np.argmax(delta_y))
+    i = flat_pos // k
+    rank = flat_pos % k  # 0-based, 0 = nearest neighbor
+    j = int(idx[i, rank])
+    d = float(dists[i, rank])
+    # Convert distance back to a similarity in [0, 1] for display.
+    # binary -> jaccard distance d, similarity = 1 - d (Tanimoto)
+    # continuous -> cosine distance d, similarity = 1 - d (cosine sim in [-1, 1])
+    similarity = 1.0 - d
+    return FalseFriendExample(
+        name=fp.name,
+        i=i,
+        j=j,
+        delta_y=float(delta_y[i, rank]),
+        similarity=similarity,
+        neighbor_rank=rank + 1,
+    )
+
+
+@typechecked
+def worst_false_friends_for_all(
+    fps: dict[str, FingerprintResult],
+    y: np.ndarray,
+    k: int = 5,
+) -> dict[str, FalseFriendExample]:
+    return {sid: worst_false_friend(fp, y, k=k) for sid, fp in fps.items()}
+
+
 @typechecked
 def cliff_knn_rmse(
     fp: FingerprintResult,
