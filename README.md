@@ -29,29 +29,40 @@ There's also a clustering experiment under `figures/clustering/` (HDBSCAN over U
 
 The RV agreement matrix is the clearest evidence. Classical FPs are not redundant with each other — most pairs sit at RV 0.30–0.40. RDKit-topo and Avalon agree most (0.62, both path-based). MIST-28M is the most isolated (RV ~0.15–0.30 with most others). CheMeleon sits closer to the classical block than MIST does (RV 0.40–0.66 with classical FPs vs MIST's 0.15–0.30).
 
-### Both neural FPs are heavily cliff-blind
+### All fingerprints struggle with activity cliffs once you control for graph distance
 
 Activity cliffs are pairs of structurally-similar molecules with very different potency. We define them fingerprint-agnostically: graph_distance ≤ 5 (atoms not shared via the maximum common substructure with strict aromatic/non-aromatic bond matching) AND |ΔpKi| ≥ 2.0. Then for each cliff pair we ask each FP for its similarity score:
 
 ![cliff-blind summary](figures/cliffs/03_cliff_blind_summary.png)
 
-The hierarchy is consistent across all three ChEMBL targets, with the actual cliff-blind rates (P(similarity ≥ 0.7)) shown above:
+The cliff-blind rates above (P(similarity ≥ 0.7)) tell the obvious story — Morgan keeps cliffs below the 0.7 threshold most often; neural FPs essentially never do. But the threshold is the wrong question. A neural cosine of 0.7 isn't comparable to a Tanimoto of 0.7. To get a more honest picture, for every cliff we sample a *matched non-cliff* — a pair of molecules at the same graph distance but with |ΔpKi| < 1.0. Then the question becomes: can the FP rank cliff pairs as less similar than non-cliff pairs at the same structural distance? PR-AUC measures this directly.
 
-- **Morgan** is the only FP with a cliff-blind rate below 50% on every target (D3 0.08, Thrombin 0.41, GSK-3β 0.20). TopTorsion is second-best on the harder targets (Thrombin 0.51, GSK-3β 0.46).
-- **AtomPair** ranges widely (D3 0.24 → Thrombin 0.76) — strong on D3, weak on Thrombin.
-- **RDKit-topo and Avalon** sit in the middle on D3 (0.39, 0.43) and become heavily cliff-blind on the harder sets (≥ 0.90 on Thrombin and GSK-3β).
-- **MACCS** is cliff-blind on the harder targets (0.96–0.98) — 167 bits don't have the resolution.
-- **CheMeleon and MIST-28M score nearly every cliff as similar** (cliff-blind rate 0.99–1.00 across all three datasets).
+![PR-AUC heatmap](figures/cliffs/04_pr_auc_summary.png)
 
-A caveat the analysis can't separate without more work: this metric uses a fixed 0.7 threshold for both Tanimoto (binary FPs) and cosine (neural FPs). Continuous embeddings with non-negative features have a higher baseline cosine even between unrelated molecules, so part of the neural cliff-blind rate is a scale artifact. There's no clean fix — rank-based metrics (cliff percentile within the FP's own pairwise distribution, PR-AUC of cliff-vs-non-cliff separation) are scale-invariant *within* a dataset, but the threshold they imply is set by the dataset's composition and doesn't transfer. A scaffold-diverse library and a congeneric series will produce very different "top 5%" cutoffs even for the same FP. The honest reading is that for neural FPs there is no single, dataset-portable "is similar" threshold to recommend — you have to calibrate per use case.
+The headline changes substantially:
 
-The D3 receptor violins make the scale issue stark:
+- **Once you control for graph distance, every fingerprint is barely above random.** The maximum PR-AUC anywhere in the matrix is Morgan on D3 at 0.60. Most cells sit in 0.46–0.58.
+- **Several FPs are below 0.5 (worse than random) on at least one target**: RDKit-topo (Thrombin 0.49, GSK-3β 0.47), Avalon (Thrombin 0.51, GSK-3β 0.48), MACCS (Thrombin 0.47), CheMeleon (D3 0.52, GSK-3β 0.46).
+- **MIST cosine on D3 is 0.36 — actively anti-correlated with cliff identity.** It systematically ranks cliffs as MORE similar than matched non-cliffs.
+- **Morgan is the only FP that is consistently above random** (PR-AUC 0.60 / 0.54 / 0.58). Even there, the absolute scores are modest.
+
+So the rank-based view doesn't rescue any FP. Cliffs really are hard to discriminate from same-graph-distance non-cliffs.
+
+The two metrics tell different stories for some FPs, which is what the scatter shows:
+
+![cliff-blind vs PR-AUC scatter](figures/cliffs/05_metric_scatter.png)
+
+Reading the D3 panel: Morgan is in the upper-left (low cliff-blind rate, highest PR-AUC) — both metrics agree it does well. CheMeleon is mid-right (high cliff-blind rate AND PR-AUC near random) — both metrics agree it does poorly. MIST-28M on D3 is far-right and *below* the random line — its cosine actually inverts the desired ordering. That's not a scale calibration problem.[^l2-check]
+
+[^l2-check]: We also re-ran the matched-control PR-AUC for the neural FPs under L2 distance instead of cosine, to rule out "the cliff-blindness is just a cosine-scale artifact." It isn't — under L2, CheMeleon goes 0.52 → 0.52 / 0.50 → 0.47 / 0.46 → 0.49 across D3 / Thrombin / GSK-3β, MIST goes 0.36 → 0.42 / 0.53 → 0.51 / 0.58 → 0.54. The neural embeddings don't separate cliffs from same-graph-distance non-cliffs under either distance metric. Figure: [`figures/cliffs/06_neural_metric_compare.png`](figures/cliffs/06_neural_metric_compare.png).
+
+For comparison, the original D3 violins are still useful for showing dynamic-range differences:
 
 ![D3 cliff violins](figures/cliffs/01_cliff_similarity_violins_CHEMBL234_Ki.png)
 
-Median cliff-pair similarity on D3: Morgan 0.43, TopTorsion 0.49, Avalon 0.59, RDKit-topo 0.60, AtomPair 0.60, MACCS 0.77, **CheMeleon 0.90, MIST 0.95**. Even taking the cosine-vs-Tanimoto scale difference into account, the neural FPs leave very little room for similarity to drop on cliffs — their dynamic range over D3's molecule space is roughly 0.7–1.0.
+Median cliff-pair similarity on D3: Morgan 0.43, TopTorsion 0.49, Avalon 0.59, RDKit-topo 0.60, AtomPair 0.60, MACCS 0.77, **CheMeleon 0.90, MIST 0.95**. Morgan's similarity distribution spans 0.0–1.0; MIST's compresses into 0.7–1.0 over the same molecule space. That dynamic-range difference is real, but the matched-control PR-AUC reframes it: even within Morgan's wider range, the cliffs aren't reliably ranked below close non-cliffs.
 
-Practical implication for retrieval-style workflows on neural FPs: **a kNN search on CheMeleon or MIST cosine cannot rule out 100× potency differences in its top hits**. Whether that's a fundamental limitation or just a similarity-scale calibration question is the open follow-up (see Gotchas).
+Practical implication: **no fingerprint we tested is a reliable cliff detector under the strict matched-control setting**. Morgan on the cleanest target (D3) gets to PR-AUC 0.60 — meaningfully better than random but not a strong signal. For activity-cliff-aware retrieval, expect the FP to flag *neighborhoods* that contain cliffs, not to discriminate cliffs from close non-cliffs by similarity alone.
 
 ### What kinds of changes does each fingerprint actually see?
 
@@ -66,7 +77,7 @@ Per-fingerprint deep-dive figures are in [`figures/cliffs/`](figures/cliffs/) �
 - **CheMeleon**: cliff-aware floor is ~0.71 even on its best examples — it cannot score true cliffs as anything but "similar." Its similarity scale is calibrated for "same chemotype family." Sensitive to: scaffold-class changes. Insensitive to: any structural change short of a full scaffold rewrite.
 - **MIST-28M**: the most compressed scale of all 8 — top-3 most cliff-aware on D3 are 0.71–0.75. Sensitive to: gross molecular character. Insensitive to: anything finer than that.
 
-The pattern across the eight: **dynamic range correlates with cliff resolution**. Morgan's similarity distribution spans 0.0–1.0 over diverse pairs and gives it room to drop low on cliffs; MIST's distribution is squeezed into roughly 0.7–1.0 over the same molecule space, so it can't distinguish "structurally similar but functionally different" from "structurally similar and functionally similar."
+The pattern across the eight: dynamic range correlates with the absolute cliff-blind rate. Morgan's similarity distribution spans 0.0–1.0 over diverse pairs and gives it room to drop low on cliffs; MIST's distribution is squeezed into roughly 0.7–1.0 over the same molecule space, so cliff pairs cluster near 1.0 in absolute terms. But the matched-control PR-AUC above shows that wider range doesn't translate into reliable cliff-vs-non-cliff *ranking* — Morgan tops out at PR-AUC 0.60 on its best target. Dynamic range determines what threshold-based intuition transfers; it does not determine whether the FP can rank cliffs below close non-cliffs.
 
 ### Concrete pair-level examples
 
@@ -138,12 +149,12 @@ The pair plots already hinted at this — even on four hand-picked pairs the cla
 
   Methods that rely on global geometry (UMAP-then-cluster, Spearman over all pairs) amplify whatever idiosyncrasy each FP has.
 - **Scaffold-purity needs scaffold-repeat-rich data.** Random ChEMBL is so scaffold-diverse (4490 unique scaffolds per 5000 molecules) that purity-at-k is mostly noise. AqSolDB has dense repeats and is the right venue.
-- **Three ChEMBL targets is a small base for "the cliff hierarchy is consistent."** D3 (n=730 cliffs), Thrombin (n=475), and GSK-3β (n=128) are the three we ran. Per-target cliff-blind rates carry sampling variance, especially on GSK-3β. The aggregated MoleculeACE (~30 targets) sweep is the planned follow-up.
+- **Three ChEMBL targets is a small base for "the cliff hierarchy is consistent."** D3 (n=730 cliffs / 433 matched non-cliffs), Thrombin (n=475 / 393), and GSK-3β (n=128 / 128) are the three we ran. Per-target metrics carry sampling variance, especially on GSK-3β. The aggregated MoleculeACE (~30 targets) sweep would tighten the cross-target conclusions and is the natural next extension.
 
 **Per-fingerprint:**
 
 - **MACCS** has only 167 bits — distinct molecules collide more often, and small-change activity cliffs almost always come out high-similarity (cliff-blind rate 0.81 on D3, 0.96–0.98 on Thrombin / GSK-3β).
-- **MIST and CheMeleon cosine scores are NOT on the same scale as Tanimoto, and there is no fixed cross-dataset threshold to substitute.** Cosine 0.4 between two MIST embeddings does not mean what 0.4 Tanimoto means. The cliff-pair probe makes this concrete: MIST median similarity over D3 cliff pairs is 0.95 (Morgan's is 0.43). Tanimoto rules of thumb ("≥ 0.7 = similar") simply do not transfer. Rank-based alternatives (percentile within a dataset's own pairwise-similarity distribution, PR-AUC of cliff-vs-non-cliff separation) are scale-invariant within a dataset but their cutoffs are set by that dataset's composition — a scaffold-diverse library and a congeneric series produce very different "top 5%" thresholds. So the practical guidance is: for binary FPs, Tanimoto thresholds carry across datasets reasonably well; for neural FPs, calibrate per use case using a small held-out set with the property you actually care about.
+- **MIST and CheMeleon cosine scores are NOT on the same scale as Tanimoto, and there is no fixed cross-dataset threshold to substitute.** Cosine 0.4 between two MIST embeddings does not mean what 0.4 Tanimoto means. The cliff-pair probe makes this concrete: MIST median similarity over D3 cliff pairs is 0.95 (Morgan's is 0.43). Tanimoto rules of thumb ("≥ 0.7 = similar") simply do not transfer. Rank-based alternatives (PR-AUC of cliff-vs-non-cliff separation) are scale-invariant within a dataset but their cutoffs are set by that dataset's composition — a scaffold-diverse library and a congeneric series produce very different "top 5%" thresholds. The practical guidance: for binary FPs, Tanimoto thresholds carry across datasets reasonably well; for neural FPs, calibrate per use case using a small held-out set with the property you actually care about.
 - **CheMeleon similarity is "chemistry-aware" but not biology-aware.** It scores activity cliffs at median similarity 0.90 on D3 — chemically the molecules in a cliff pair really are very similar, and CheMeleon agrees. It just doesn't know that small chemical change can imply huge potency change.
 
 ## Practical takeaway
@@ -151,7 +162,7 @@ The pair plots already hinted at this — even on four hand-picked pairs the cla
 Pick the fingerprint for the question:
 
 - **Threshold portability across datasets** → Tanimoto on binary FPs (Morgan, RDKit-topo, Avalon, AtomPair, TopTorsion, MACCS) is roughly comparable across datasets — a "≥ 0.7 = similar" rule developed on one ChEMBL target carries forward to another with similar meaning. Cosine on neural FPs (CheMeleon, MIST) does not — the same numeric threshold means different things on different datasets, and rank-based fixes (percentiles, PR-AUC) are also dataset-bound. If you need a portable "is this similar?" decision rule, prefer a binary FP. If you need neural FPs, plan to calibrate the threshold per use case.
-- **Activity-cliff-sensitive retrieval** on a known target → Morgan first; TopTorsion as a backup on harder targets. Across the three ChEMBL targets we tested, Morgan was the only FP with cliff-blind rate < 50% on every target (0.08 / 0.41 / 0.20). Avoid neural FPs and MACCS for this kind of retrieval.
+- **Activity-cliff-sensitive retrieval** on a known target → Morgan, with realistic expectations. Morgan has the lowest cliff-blind rate at the conventional 0.7 threshold (0.08 / 0.41 / 0.20 across the three targets), and is the only FP consistently above random under the matched-control PR-AUC (0.60 / 0.54 / 0.58). But "above random" is not "good" — even Morgan tops out around PR-AUC 0.6. The realistic mode is "use Morgan to flag neighborhoods that may contain cliffs" rather than "use Morgan similarity to discriminate cliff pairs from close non-cliff pairs." Avoid neural FPs and MACCS for any cliff-related retrieval; under the matched-control test they range from random to actively anti-correlated (MIST D3 PR-AUC 0.36).
 - **Local property-aware lookup** (find similar molecules, hope their property values are informative) → CheMeleon's geometry shows the strongest property gradient on AqSolDB logS in the UMAP and the highest kNN R². The cliff blindness doesn't hurt as much when the property is smoothly distributed (no single methyl-swap is going to flip logS by 100×). Note: this is a structural-alignment observation, not a benchmarked predictor — if you need a real ADME model, train one on top.
 - **Chemotype discovery / clustering** in a drug-like library → if natural clusters exist at all, MACCS and Avalon are most likely to surface them; MIST is the least scaffold-anchored and least likely to. Note the clustering experiment under `figures/clustering/` — random ChEMBL is too scaffold-diverse to cluster meaningfully even with the most scaffold-anchored FP.
 - **Feature input to a supervised neural model** → MIST's distinctness from classical FPs may be the point. The downstream model can re-learn cliff structure from labels.
@@ -171,6 +182,7 @@ uv run python scripts/figure_adme_families.py
 uv run python scripts/figure_agreement.py
 uv run python scripts/figure_scaffolds.py
 uv run python scripts/figure_cliffs.py
+uv run python scripts/figure_cliffs_aggregate.py
 ```
 
 Figures land under `figures/<topic>/`.
