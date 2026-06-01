@@ -37,22 +37,36 @@ Activity cliffs are pairs of structurally-similar molecules with very different 
 
 The cliff-blind rates above (P(similarity ≥ 0.7)) tell the obvious story — Morgan keeps cliffs below the 0.7 threshold most often; neural FPs essentially never do. But the threshold is the wrong question. A neural cosine of 0.7 isn't comparable to a Tanimoto of 0.7. To get a more honest picture, for every cliff we sample a *matched non-cliff* — a pair of molecules at the same graph distance but with |ΔpKi| < 1.0. Then the question becomes: can the FP rank cliff pairs as less similar than non-cliff pairs at the same structural distance? PR-AUC measures this directly.
 
+Run across all 30 MoleculeACE targets:
+
+![cross-target PR-AUC boxplot](figures/cliffs/07_pr_auc_cross_target_boxplot.png)
+
+Each dot is one target. The headline:
+
+- **Every fingerprint detects cliffs above chance across the benchmark** (all Wilcoxon p < 0.003 vs null PR-AUC = 0.5), but the effect sizes are modest:
+
+| Fingerprint | Median PR-AUC | Mean | #targets > 0.5 | Wilcoxon p (> 0.5) |
+|---|---|---|---|---|
+| Morgan | 0.606 | 0.617 | 25/27 | 5.2e-6 |
+| TopTorsion | 0.601 | 0.612 | 26/27 | 5.5e-6 |
+| CheMeleon | 0.603 | 0.587 | 23/27 | 4.1e-5 |
+| MACCS | 0.587 | 0.572 | 22/27 | 1.2e-4 |
+| AtomPair | 0.580 | 0.583 | 25/27 | 1.2e-5 |
+| Avalon | 0.572 | 0.574 | 22/27 | 2.5e-4 |
+| RDKit-topo | 0.568 | 0.562 | 19/27 | 8.2e-4 |
+| MIST-28M | 0.553 | 0.548 | 22/27 | 2.3e-3 |
+
+- **Morgan and TopTorsion are roughly tied at the top** (median 0.60–0.61). Both have IQRs clearly above 0.50. CheMeleon is comparable on the median (0.60) but has wider cross-target variance.
+- **MIST-28M is the weakest** (median 0.55), but even it is statistically above chance. Its problem is consistency — multiple targets where it scores below 0.5.
+- **The effect ceiling is low.** Best individual (target, FP) pairs reach ~0.83, but medians top out at 0.61. Cliffs are genuinely hard to distinguish from same-graph-distance non-cliffs by similarity alone.
+
+Three-target detail figures with bootstrap 95% CIs:
+
 ![PR-AUC heatmap](figures/cliffs/04_pr_auc_summary.png)
-
-The headline changes substantially:
-
-- **Once you control for graph distance, every fingerprint is barely above random.** The maximum PR-AUC anywhere in the matrix is Morgan on D3 at 0.60. Most cells sit in 0.46–0.58.
-- **Several FPs are below 0.5 (worse than random) on at least one target**: RDKit-topo (Thrombin 0.49, GSK-3β 0.47), Avalon (Thrombin 0.51, GSK-3β 0.48), MACCS (Thrombin 0.47), CheMeleon (D3 0.52, GSK-3β 0.46).
-- **MIST cosine on D3 is 0.36 — actively anti-correlated with cliff identity.** It systematically ranks cliffs as MORE similar than matched non-cliffs.
-- **Morgan is the only FP that is consistently above random** (PR-AUC 0.60 / 0.54 / 0.58). Even there, the absolute scores are modest.
-
-So the rank-based view doesn't rescue any FP. Cliffs really are hard to discriminate from same-graph-distance non-cliffs.
-
-The two metrics tell different stories for some FPs, which is what the scatter shows:
 
 ![cliff-blind vs PR-AUC scatter](figures/cliffs/05_metric_scatter.png)
 
-Reading the D3 panel: Morgan is in the upper-left (low cliff-blind rate, highest PR-AUC) — both metrics agree it does well. CheMeleon is mid-right (high cliff-blind rate AND PR-AUC near random) — both metrics agree it does poorly. MIST-28M on D3 is far-right and *below* the random line — its cosine actually inverts the desired ordering. That's not a scale calibration problem.[^l2-check]
+Reading the scatter: Morgan is in the upper-left of every panel (low cliff-blind rate AND highest PR-AUC) — both metrics agree. The CIs make clear which "above-random" claims are statistically meaningful: on D3 (n=730 cliffs), Morgan's CI [0.56, 0.65] is clearly above 0.5; on GSK-3β (n=128), all CIs span 0.5 because the sample is too small. MIST cosine on D3 is far-right and *below* random with CI [0.34, 0.39] — it systematically ranks cliffs as MORE similar than matched non-cliffs. That's not a scale calibration problem.[^l2-check]
 
 [^l2-check]: We also re-ran the matched-control PR-AUC for the neural FPs under L2 distance instead of cosine, to rule out "the cliff-blindness is just a cosine-scale artifact." It isn't — under L2, CheMeleon goes 0.52 → 0.52 / 0.50 → 0.47 / 0.46 → 0.49 across D3 / Thrombin / GSK-3β, MIST goes 0.36 → 0.42 / 0.53 → 0.51 / 0.58 → 0.54. The neural embeddings don't separate cliffs from same-graph-distance non-cliffs under either distance metric. Figure: [`figures/cliffs/06_neural_metric_compare.png`](figures/cliffs/06_neural_metric_compare.png).
 
@@ -62,7 +76,7 @@ For comparison, the original D3 violins are still useful for showing dynamic-ran
 
 Median cliff-pair similarity on D3: Morgan 0.43, TopTorsion 0.49, Avalon 0.59, RDKit-topo 0.60, AtomPair 0.60, MACCS 0.77, **CheMeleon 0.90, MIST 0.95**. Morgan's similarity distribution spans 0.0–1.0; MIST's compresses into 0.7–1.0 over the same molecule space. That dynamic-range difference is real, but the matched-control PR-AUC reframes it: even within Morgan's wider range, the cliffs aren't reliably ranked below close non-cliffs.
 
-Practical implication: **no fingerprint we tested is a reliable cliff detector under the strict matched-control setting**. Morgan on the cleanest target (D3) gets to PR-AUC 0.60 — meaningfully better than random but not a strong signal. For activity-cliff-aware retrieval, expect the FP to flag *neighborhoods* that contain cliffs, not to discriminate cliffs from close non-cliffs by similarity alone.
+Practical implication: **all fingerprints detect cliffs above chance, but the signal is weak** (median PR-AUC 0.55–0.61 across 27 targets). For activity-cliff-aware retrieval, expect the FP to flag *neighborhoods* that contain cliffs, not to reliably discriminate individual cliff pairs from close non-cliffs by similarity alone.
 
 ### What kinds of changes does each fingerprint actually see?
 
@@ -149,7 +163,7 @@ The pair plots already hinted at this — even on four hand-picked pairs the cla
 
   Methods that rely on global geometry (UMAP-then-cluster, Spearman over all pairs) amplify whatever idiosyncrasy each FP has.
 - **Scaffold-purity needs scaffold-repeat-rich data.** Random ChEMBL is so scaffold-diverse (4490 unique scaffolds per 5000 molecules) that purity-at-k is mostly noise. AqSolDB has dense repeats and is the right venue.
-- **Three ChEMBL targets is a small base for "the cliff hierarchy is consistent."** D3 (n=730 cliffs / 433 matched non-cliffs), Thrombin (n=475 / 393), and GSK-3β (n=128 / 128) are the three we ran. Per-target metrics carry sampling variance, especially on GSK-3β. The aggregated MoleculeACE (~30 targets) sweep would tighten the cross-target conclusions and is the natural next extension.
+- **Three ChEMBL targets is a small base for "the cliff hierarchy is consistent."** The 3-target detail figures (D3, Thrombin, GSK-3β) are shown with bootstrap CIs; the cross-target boxplot on all 30 MoleculeACE targets (27 with cliff n ≥ 30) is the definitive view. Some findings that seemed strong on 3 targets (e.g. "CheMeleon is near-random on cliffs") washed out with broader coverage.
 
 **Per-fingerprint:**
 
@@ -162,7 +176,7 @@ The pair plots already hinted at this — even on four hand-picked pairs the cla
 Pick the fingerprint for the question:
 
 - **Threshold portability across datasets** → Tanimoto on binary FPs (Morgan, RDKit-topo, Avalon, AtomPair, TopTorsion, MACCS) is roughly comparable across datasets — a "≥ 0.7 = similar" rule developed on one ChEMBL target carries forward to another with similar meaning. Cosine on neural FPs (CheMeleon, MIST) does not — the same numeric threshold means different things on different datasets, and rank-based fixes (percentiles, PR-AUC) are also dataset-bound. If you need a portable "is this similar?" decision rule, prefer a binary FP. If you need neural FPs, plan to calibrate the threshold per use case.
-- **Activity-cliff-sensitive retrieval** on a known target → Morgan, with realistic expectations. Morgan has the lowest cliff-blind rate at the conventional 0.7 threshold (0.08 / 0.41 / 0.20 across the three targets), and is the only FP consistently above random under the matched-control PR-AUC (0.60 / 0.54 / 0.58). But "above random" is not "good" — even Morgan tops out around PR-AUC 0.6. The realistic mode is "use Morgan to flag neighborhoods that may contain cliffs" rather than "use Morgan similarity to discriminate cliff pairs from close non-cliff pairs." Avoid neural FPs and MACCS for any cliff-related retrieval; under the matched-control test they range from random to actively anti-correlated (MIST D3 PR-AUC 0.36).
+- **Activity-cliff-sensitive retrieval** on a known target → Morgan or TopTorsion. Across all 30 MoleculeACE targets, both have median matched-control PR-AUC ≈ 0.60 with IQRs that sit clearly above the 0.5 random line. Best individual targets reach 0.83. CheMeleon is comparable on the median (0.60) but with wider variance and several below-random outliers. Avoid MIST-28M for cliff-related work — it's the only FP whose 25th percentile is below random across the benchmark.
 - **Local property-aware lookup** (find similar molecules, hope their property values are informative) → CheMeleon's geometry shows the strongest property gradient on AqSolDB logS in the UMAP and the highest kNN R². The cliff blindness doesn't hurt as much when the property is smoothly distributed (no single methyl-swap is going to flip logS by 100×). Note: this is a structural-alignment observation, not a benchmarked predictor — if you need a real ADME model, train one on top.
 - **Chemotype discovery / clustering** in a drug-like library → if natural clusters exist at all, MACCS and Avalon are most likely to surface them; MIST is the least scaffold-anchored and least likely to. Note the clustering experiment under `figures/clustering/` — random ChEMBL is too scaffold-diverse to cluster meaningfully even with the most scaffold-anchored FP.
 - **Feature input to a supervised neural model** → MIST's distinctness from classical FPs may be the point. The downstream model can re-learn cliff structure from labels.

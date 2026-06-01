@@ -57,7 +57,8 @@ class MolACEDataset:
     assay_type: str
 
 
-# Three targets spanning different chemistry regimes.
+# Three targets used in the headline cliffs analysis (kept as named exports
+# for backward compatibility with figure_cliffs.py and figure_cliffs_aggregate.py).
 D3_DOPAMINE = MolACEDataset(
     name="CHEMBL234_Ki",
     target_label="Dopamine D3 receptor",
@@ -75,6 +76,45 @@ GSK3B = MolACEDataset(
     target_label="GSK-3 beta",
     target_class="kinase",
     assay_type="Ki",
+)
+
+
+# Full MoleculeACE benchmark target list (30 datasets), reproduced from
+# https://github.com/molML/MoleculeACE/blob/main/MoleculeACE/Data/benchmark_data/metadata/datasets.csv
+# Used for the cross-target aggregation analysis. target_class follows the
+# original "Receptor Class" column (lowercased for consistency with the
+# three-target exports above).
+ALL_MOLACE_DATASETS: tuple[MolACEDataset, ...] = (
+    MolACEDataset(name="CHEMBL1871_Ki", target_label="Androgen Receptor", target_class="NR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL218_EC50", target_label="Cannabinoid receptor 1", target_class="GPCR", assay_type="EC50"),
+    MolACEDataset(name="CHEMBL244_Ki", target_label="Coagulation factor X", target_class="protease", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL236_Ki", target_label="Delta opioid receptor", target_class="GPCR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL234_Ki", target_label="Dopamine D3 receptor", target_class="GPCR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL219_Ki", target_label="Dopamine D4 receptor", target_class="GPCR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL238_Ki", target_label="Dopamine transporter", target_class="other", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL4203_Ki", target_label="Dual specificity protein kinase CLK4", target_class="kinase", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL2047_EC50", target_label="Farnesoid X receptor", target_class="NR", assay_type="EC50"),
+    MolACEDataset(name="CHEMBL4616_EC50", target_label="Ghrelin receptor", target_class="GPCR", assay_type="EC50"),
+    MolACEDataset(name="CHEMBL2034_Ki", target_label="Glucocorticoid receptor", target_class="NR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL262_Ki", target_label="GSK-3 beta", target_class="kinase", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL231_Ki", target_label="Histamine H1 receptor", target_class="GPCR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL264_Ki", target_label="Histamine H3 receptor", target_class="GPCR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL2835_Ki", target_label="Janus kinase 1", target_class="kinase", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL2971_Ki", target_label="Janus kinase 2", target_class="kinase", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL237_EC50", target_label="Kappa opioid receptor (EC50)", target_class="GPCR", assay_type="EC50"),
+    MolACEDataset(name="CHEMBL237_Ki", target_label="Kappa opioid receptor (Ki)", target_class="GPCR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL4792_Ki", target_label="Orexin receptor 2", target_class="GPCR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL239_EC50", target_label="PPAR alpha", target_class="NR", assay_type="EC50"),
+    MolACEDataset(name="CHEMBL3979_EC50", target_label="PPAR delta", target_class="NR", assay_type="EC50"),
+    MolACEDataset(name="CHEMBL235_EC50", target_label="PPAR gamma", target_class="NR", assay_type="EC50"),
+    MolACEDataset(name="CHEMBL4005_Ki", target_label="PI3-kinase p110-alpha", target_class="transferase", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL2147_Ki", target_label="PIM1 kinase", target_class="kinase", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL214_Ki", target_label="Serotonin 1a receptor", target_class="GPCR", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL228_Ki", target_label="Serotonin transporter", target_class="other", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL287_Ki", target_label="Sigma opioid receptor", target_class="other", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL204_Ki", target_label="Thrombin (F2)", target_class="protease", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL1862_Ki", target_label="ABL1 kinase", target_class="kinase", assay_type="Ki"),
+    MolACEDataset(name="CHEMBL233_Ki", target_label="mu-opioid receptor", target_class="GPCR", assay_type="Ki"),
 )
 
 

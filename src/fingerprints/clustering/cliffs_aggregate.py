@@ -273,6 +273,10 @@ class CliffSeparationResult:
         pr_auc: average precision treating cliffs as the positive class
             and non-cliffs as the negative class. Higher = better
             separation. 0.5 = random under 1:1 prevalence.
+        pr_auc_ci: optional (lo, hi) bootstrap 95% CI on pr_auc.
+        median_cliff_sim_ci: optional CI on median_cliff_sim.
+        cliff_blind_rate_07_ci: optional CI on cliff_blind_rate_07.
+        n_bootstrap: number of bootstrap iterations used (0 if no CI).
     """
 
     name: str
@@ -285,6 +289,73 @@ class CliffSeparationResult:
     median_noncliff_sim: float
     cliff_blind_rate_07: float
     pr_auc: float
+    pr_auc_ci: tuple[float, float] | None = None
+    median_cliff_sim_ci: tuple[float, float] | None = None
+    cliff_blind_rate_07_ci: tuple[float, float] | None = None
+    n_bootstrap: int = 0
+
+
+def _bootstrap_metrics(
+    cliff_sims: np.ndarray,
+    noncliff_sims: np.ndarray,
+    metric: str,
+    n_bootstrap: int,
+    seed: int,
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float] | None]:
+    """Bootstrap 95% CIs for (PR-AUC, median_cliff_sim, cliff_blind_rate_07).
+
+    Resamples cliffs and non-cliffs independently with replacement; the
+    sample sizes are kept at the original n_cliffs and n_noncliffs so the
+    PR-AUC prevalence (which is fixed at the matched 1:1 ratio in our
+    setup) is preserved on each iteration.
+
+    Returns:
+        (pr_auc_ci, median_cliff_ci, cliff_blind_rate_ci or None).
+        cliff_blind_rate_ci is None when metric is not jaccard / cosine
+        (i.e. when the underlying point estimate is NaN).
+    """
+    rng = np.random.default_rng(seed)
+    n_c = cliff_sims.shape[0]
+    n_nc = noncliff_sims.shape[0]
+
+    pr_aucs = np.zeros(n_bootstrap, dtype=np.float64)
+    medians = np.zeros(n_bootstrap, dtype=np.float64)
+    if metric in ("jaccard", "cosine"):
+        blind_rates: np.ndarray | None = np.zeros(n_bootstrap, dtype=np.float64)
+    else:
+        blind_rates = None
+
+    # Pre-compute label arrays since they don't change
+    y_true = np.concatenate([np.zeros(n_c), np.ones(n_nc)])
+
+    for b in range(n_bootstrap):
+        ci = rng.integers(0, n_c, size=n_c)
+        nci = rng.integers(0, n_nc, size=n_nc)
+        cs_b = cliff_sims[ci]
+        ns_b = noncliff_sims[nci]
+        scores = np.concatenate([cs_b, ns_b])
+        pr_aucs[b] = average_precision_score(y_true, scores)
+        medians[b] = np.median(cs_b)
+        if blind_rates is not None:
+            blind_rates[b] = (cs_b >= 0.7).mean()
+
+    pr_auc_ci = (
+        float(np.percentile(pr_aucs, 2.5)),
+        float(np.percentile(pr_aucs, 97.5)),
+    )
+    median_ci = (
+        float(np.percentile(medians, 2.5)),
+        float(np.percentile(medians, 97.5)),
+    )
+    if blind_rates is not None:
+        blind_ci: tuple[float, float] | None = (
+            float(np.percentile(blind_rates, 2.5)),
+            float(np.percentile(blind_rates, 97.5)),
+        )
+    else:
+        blind_ci = None
+
+    return pr_auc_ci, median_ci, blind_ci
 
 
 @typechecked
@@ -293,6 +364,8 @@ def cliff_separation_for(
     cliff_pairs: list[CliffPair],
     noncliff_pairs: list[NonCliffPair],
     metric: str | None = None,
+    n_bootstrap: int = 0,
+    seed: int = 0,
 ) -> CliffSeparationResult:
     """Compute cliff-vs-non-cliff separation metrics for one FP.
 
@@ -305,6 +378,11 @@ def cliff_separation_for(
     For metric selection: when `metric` is None, defaults from
     `default_metric_for(fp.kind)` (jaccard for binary, cosine for
     continuous). Pass 'euclidean' to override on continuous FPs.
+
+    If `n_bootstrap > 0`, also computes 95% bootstrap CIs for PR-AUC,
+    median cliff similarity, and cliff-blind rate (the latter only when
+    metric is in {jaccard, cosine}). Resamples cliffs and non-cliffs
+    independently with replacement.
     """
     from fingerprints.fingerprint_methods.base import default_metric_for
 
@@ -348,11 +426,28 @@ def cliff_separation_for(
     else:
         cb07 = float("nan")
 
-    logger.info(
-        f"separation: {fp.name} metric={metric} "
-        f"med_cliff={median_cliff:.3f} med_nc={median_nc:.3f} "
-        f"PR-AUC={pr_auc:.3f}"
-    )
+    pr_auc_ci: tuple[float, float] | None = None
+    median_ci: tuple[float, float] | None = None
+    blind_ci: tuple[float, float] | None = None
+    if n_bootstrap > 0:
+        pr_auc_ci, median_ci, blind_ci = _bootstrap_metrics(
+            cliff_sims, noncliff_sims, metric, n_bootstrap, seed,
+        )
+
+    if pr_auc_ci is not None:
+        assert median_ci is not None  # set together by _bootstrap_metrics
+        logger.info(
+            f"separation: {fp.name} metric={metric} "
+            f"med_cliff={median_cliff:.3f} [{median_ci[0]:.3f},{median_ci[1]:.3f}] "
+            f"med_nc={median_nc:.3f} "
+            f"PR-AUC={pr_auc:.3f} [{pr_auc_ci[0]:.3f},{pr_auc_ci[1]:.3f}]"
+        )
+    else:
+        logger.info(
+            f"separation: {fp.name} metric={metric} "
+            f"med_cliff={median_cliff:.3f} med_nc={median_nc:.3f} "
+            f"PR-AUC={pr_auc:.3f}"
+        )
 
     return CliffSeparationResult(
         name=fp.name,
@@ -365,6 +460,10 @@ def cliff_separation_for(
         median_noncliff_sim=median_nc,
         cliff_blind_rate_07=cb07,
         pr_auc=pr_auc,
+        pr_auc_ci=pr_auc_ci,
+        median_cliff_sim_ci=median_ci,
+        cliff_blind_rate_07_ci=blind_ci,
+        n_bootstrap=n_bootstrap,
     )
 
 
@@ -374,6 +473,8 @@ def cliff_separation_for_all(
     cliff_pairs: list[CliffPair],
     noncliff_pairs: list[NonCliffPair],
     extra_metrics: dict[str, str] | None = None,
+    n_bootstrap: int = 0,
+    seed: int = 0,
 ) -> dict[str, CliffSeparationResult]:
     """Run cliff_separation_for over every FP, with optional metric override.
 
@@ -385,10 +486,17 @@ def cliff_separation_for_all(
             the default metric for those FPs. Used for the L2 sanity
             check on neural FPs - pass {'chemeleon': 'euclidean',
             'mist_28M': 'euclidean'} to get the alternative metric.
+        n_bootstrap: if > 0, request bootstrap CIs on PR-AUC, median
+            cliff sim, and cliff-blind rate.
+        seed: bootstrap RNG seed (each FP uses seed + idx so they're
+            decorrelated but reproducible).
     """
     extra_metrics = extra_metrics or {}
     out: dict[str, CliffSeparationResult] = {}
-    for sid, fp in fps.items():
+    for idx, (sid, fp) in enumerate(fps.items()):
         metric = extra_metrics.get(sid)
-        out[sid] = cliff_separation_for(fp, cliff_pairs, noncliff_pairs, metric=metric)
+        out[sid] = cliff_separation_for(
+            fp, cliff_pairs, noncliff_pairs,
+            metric=metric, n_bootstrap=n_bootstrap, seed=seed + idx,
+        )
     return out
