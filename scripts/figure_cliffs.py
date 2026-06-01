@@ -3,12 +3,13 @@
 Activity cliffs are defined fingerprint-agnostically: pairs of molecules
 with |delta pKi| >= 2.0 and graph_distance <= 5 (where graph_distance =
 n_atoms_i + n_atoms_j - 2 * mcs_atoms). For each fingerprint we measure
-its similarity over the cliff pair set and report:
+its similarity over the cliff pair set and produce:
 
 - 01_cliff_similarity_violins_<target>.png: distribution of similarities
-  per fingerprint. Lower = better.
-- 02_cliff_examples_<target>.png: per-FP molecule-pair illustrations of
-  the most cliff-blind and least cliff-blind cases.
+  per fingerprint per dataset. Lower = better.
+- 02_cliff_examples_<short_id>.png: per-FP deep-dive showing top-3 most
+  cliff-blind and top-3 most cliff-aware molecule pairs across all
+  three datasets. One image file per fingerprint.
 - 03_cliff_blind_summary.png: cross-dataset heatmap of P(sim >= 0.7).
 
 Cliff candidates are cached at .cache/cliff_pairs/<dataset>.pkl since the
@@ -32,6 +33,7 @@ from loguru import logger
 from rdkit.Chem import MolFromSmiles
 
 from fingerprints.clustering.cliffs import (
+    CliffExamplePair,
     CliffPair,
     CliffSimResult,
     cliff_similarity_for_all,
@@ -51,7 +53,7 @@ from fingerprints.fingerprint_methods.chemeleon_fp import CheMeleonFingerprint
 from fingerprints.fingerprint_methods.mist_fp import MIST_28M, MISTFingerprint
 from fingerprints.plots.cliffs import (
     plot_cliff_blind_summary,
-    plot_cliff_examples,
+    plot_cliff_examples_per_fp,
     plot_cliff_similarity_violins,
 )
 
@@ -119,7 +121,16 @@ def main(use_cache: bool = True) -> None:
     chemeleon = CheMeleonFingerprint(device=device)
     mist_28m = MISTFingerprint(model_id=MIST_28M, device=device)
 
+    # Collect per-dataset results, plus per-fingerprint examples spanning
+    # all datasets so we can emit one figure per FP at the end.
     sims_by_dataset: dict[str, dict[str, CliffSimResult]] = {}
+    mols_by_dataset: dict[str, list] = {}
+    y_by_dataset: dict[str, np.ndarray] = {}
+    # examples_by_fp[short_id][dataset_label] = (most_blind, most_aware) lists
+    examples_by_fp: dict[
+        str, dict[str, tuple[list[CliffExamplePair], list[CliffExamplePair]]]
+    ] = {}
+    fp_display_names: dict[str, str] = {}
 
     for ds in DATASETS:
         logger.info(f"=== {ds.name} ({ds.target_label}) ===")
@@ -133,8 +144,13 @@ def main(use_cache: bool = True) -> None:
         fps = _build_fps(mols, chemeleon, mist_28m)
         sims = cliff_similarity_for_all(fps, cliff_pairs)
         sims_by_dataset[ds.target_label] = sims
+        mols_by_dataset[ds.target_label] = mols
+        y_by_dataset[ds.target_label] = y
 
-        examples = select_cliff_examples_for_all(fps, cliff_pairs)
+        examples = select_cliff_examples_for_all(fps, cliff_pairs, n_top=3)
+        for sid, fp in fps.items():
+            examples_by_fp.setdefault(sid, {})[ds.target_label] = examples[sid]
+            fp_display_names[sid] = fp.name
 
         plot_cliff_similarity_violins(
             sims,
@@ -144,15 +160,23 @@ def main(use_cache: bool = True) -> None:
                 f"({ds.target_class}, n={len(cliff_pairs)} cliff pairs)"
             ),
         )
-        plot_cliff_examples(
-            examples, mols=mols, y=y,
-            out_path=FIG_DIR / f"02_cliff_examples_{ds.name}.png",
-            title=(
-                f"Cliff examples per fingerprint \u2014 {ds.target_label}"
-            ),
-        )
 
         del fps
+
+    # Per-fingerprint deep-dive: one image per FP, six panels per dataset
+    # (3 most cliff-blind + 3 most cliff-aware).
+    for sid, examples_by_dataset in examples_by_fp.items():
+        plot_cliff_examples_per_fp(
+            short_id=sid,
+            fp_display_name=fp_display_names[sid],
+            examples_by_dataset=examples_by_dataset,
+            mols_by_dataset=mols_by_dataset,
+            y_by_dataset=y_by_dataset,
+            out_path=FIG_DIR / f"02_cliff_examples_{sid}.png",
+            title=(
+                f"Cliff examples \u2014 {fp_display_names[sid]}"
+            ),
+        )
 
     # Cross-dataset summary
     plot_cliff_blind_summary(

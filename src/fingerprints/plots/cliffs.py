@@ -5,10 +5,9 @@ Three figure types:
 - `plot_cliff_similarity_violins`: distribution of FP similarities over
   cliff pairs, one violin per fingerprint. Lower violins = better cliff
   resolution. The headline figure.
-- `plot_cliff_examples`: per-fingerprint molecule-pair illustrations.
-  Two columns: most cliff-blind pair (highest similarity) on the left,
-  least cliff-blind (lowest similarity) on the right. Gives visual
-  intuition for what each FP misses and catches.
+- `plot_cliff_examples_per_fp`: per-fingerprint deep-dive showing top-3
+  most cliff-blind and top-3 most cliff-aware molecule pairs across all
+  three datasets. One image file per fingerprint.
 - `plot_cliff_blind_summary`: cross-dataset heatmap of P(sim >= 0.7)
   per fingerprint per dataset.
 """
@@ -171,169 +170,124 @@ def plot_cliff_similarity_violins(
     return out_path
 
 
-def _draw_pair_cell(
-    ax_mol,
-    ax_metrics,
-    mol_a: Mol,
-    mol_b: Mol,
-    pki_a: float,
-    pki_b: float,
-    metric_lines: list[tuple[str, bool]],
-    highlight_a: list[int] | None = None,
-    highlight_b: list[int] | None = None,
-) -> None:
-    img = _draw_pair_image(mol_a, mol_b, highlight_a=highlight_a, highlight_b=highlight_b)
-    ax_mol.imshow(img)
-    ax_mol.set_xticks([])
-    ax_mol.set_yticks([])
-    for spine in ax_mol.spines.values():
-        spine.set_edgecolor("#cccccc")
-        spine.set_linewidth(0.5)
-    ax_mol.text(
-        0.25, -0.04, f"pKi = {pki_a:.2f}",
-        transform=ax_mol.transAxes,
-        fontsize=9, ha="center", va="top",
-    )
-    ax_mol.text(
-        0.75, -0.04, f"pKi = {pki_b:.2f}",
-        transform=ax_mol.transAxes,
-        fontsize=9, ha="center", va="top",
-    )
-
-    ax_metrics.axis("off")
-    n_lines = len(metric_lines)
-    for li, (line, bold) in enumerate(metric_lines):
-        y_pos = 0.85 - li * (0.7 / max(n_lines - 1, 1))
-        ax_metrics.text(
-            0.0, y_pos, line,
-            transform=ax_metrics.transAxes,
-            fontsize=8.5, ha="left", va="center",
-            fontweight="bold" if bold else "normal",
-            color="black" if bold else "#444444",
-        )
-
-
 @typechecked
-def plot_cliff_examples(
-    examples: dict[str, tuple[CliffExamplePair, CliffExamplePair]],
-    mols: list[Mol],
-    y: np.ndarray,
+def plot_cliff_examples_per_fp(
+    short_id: str,
+    fp_display_name: str,
+    examples_by_dataset: dict[str, tuple[list[CliffExamplePair], list[CliffExamplePair]]],
+    mols_by_dataset: dict[str, list[Mol]],
+    y_by_dataset: dict[str, np.ndarray],
     out_path: Path,
     title: str = "",
-    row_height: float = 1.7,
+    row_height: float = 2.6,
     dpi: int = 200,
 ) -> Path:
-    """8-row x 2-column figure: most cliff-blind pair on left, least on right.
+    """Per-fingerprint deep-dive example figure.
 
-    'Most cliff-blind' = the cliff pair this FP scored highest. 'Least
-    cliff-blind' = the cliff pair this FP scored lowest. Both pairs are
-    real activity cliffs from the dataset (graph-distance <= 5,
-    |delta pKi| >= 2.0).
+    Layout: one row per dataset, six mol-pair columns per row. The first
+    three columns are the FP's top-3 most cliff-blind pairs (highest
+    similarity on a true cliff); the last three are its top-3 most
+    cliff-aware (lowest similarity on a true cliff). Each panel is a
+    side-by-side molecule pair with non-MCS atoms highlighted, pKi values
+    underneath, and the FP similarity / |Delta pKi| / graph distance
+    above.
+
+    Args:
+        short_id: fingerprint short id (used only for color coding here).
+        fp_display_name: human-readable label, e.g. "Morgan(r=2,2048b)".
+        examples_by_dataset: dict mapping dataset label to
+            (most_blind_pairs, most_aware_pairs); each list is length 3
+            (or shorter if too few cliff pairs in that dataset).
+        mols_by_dataset: dict mapping dataset label to its molecule list.
+        y_by_dataset: dict mapping dataset label to its pKi array.
+        out_path: png destination.
+        title: figure title.
     """
-    short_ids = list(examples.keys())
-    order = grouped_order(short_ids)
-    short_ids = [short_ids[i] for i in order]
-    n_rows = len(short_ids)
+    datasets = list(examples_by_dataset.keys())
+    n_rows = len(datasets)
+    if n_rows == 0:
+        raise ValueError("examples_by_dataset is empty")
 
-    fig_w = 18.0
-    fig_h = row_height * n_rows + 0.8
+    group, color, _ = style_for(short_id)
+
+    # 3 most-blind columns + visual gap + 3 most-aware columns
+    n_blind_cols = 3
+    n_aware_cols = 3
+    col_count = 1 + n_blind_cols + n_aware_cols  # leftmost is dataset label
+
+    # Width ratios: label narrow, then 6 wide mol panels with a small gap
+    width_ratios = [0.6] + [1.0] * n_blind_cols + [1.0] * n_aware_cols
+
+    fig_w = sum(width_ratios) * 1.95
+    fig_h = row_height * n_rows + 1.0
     fig = plt.figure(figsize=(fig_w, fig_h))
 
     gs = fig.add_gridspec(
-        n_rows + 1, 5,
-        width_ratios=(1.4, 4.2, 1.3, 4.2, 1.3),
-        height_ratios=(0.4,) + (1.0,) * n_rows,
-        hspace=0.18, wspace=0.05,
+        n_rows + 1, col_count,
+        width_ratios=width_ratios,
+        height_ratios=(0.5,) + (1.0,) * n_rows,
+        hspace=0.45, wspace=0.10,
     )
 
-    # Headers
+    # Header row
     ax_h_label = fig.add_subplot(gs[0, 0])
     ax_h_label.axis("off")
-    ax_h_most = fig.add_subplot(gs[0, 1:3])
-    ax_h_most.axis("off")
-    ax_h_most.text(
-        0.5, 0.0, "Most cliff-blind  (highest similarity on a true cliff)",
-        transform=ax_h_most.transAxes,
+    ax_h_blind = fig.add_subplot(gs[0, 1:1 + n_blind_cols])
+    ax_h_blind.axis("off")
+    ax_h_blind.text(
+        0.5, 0.0,
+        "Most cliff-blind  (highest similarity on true cliffs)",
+        transform=ax_h_blind.transAxes,
         fontsize=12, fontweight="bold", ha="center", va="bottom",
         color="#9c2d2d",
     )
-    ax_h_least = fig.add_subplot(gs[0, 3:5])
-    ax_h_least.axis("off")
-    ax_h_least.text(
-        0.5, 0.0, "Least cliff-blind  (lowest similarity on a true cliff)",
-        transform=ax_h_least.transAxes,
+    ax_h_aware = fig.add_subplot(gs[0, 1 + n_blind_cols:])
+    ax_h_aware.axis("off")
+    ax_h_aware.text(
+        0.5, 0.0,
+        "Most cliff-aware  (lowest similarity on true cliffs)",
+        transform=ax_h_aware.transAxes,
         fontsize=12, fontweight="bold", ha="center", va="bottom",
         color="#1f5c2e",
     )
 
-    for ri, sid in enumerate(short_ids, start=1):
-        most, least = examples[sid]
-        group, color, _ = style_for(sid)
+    for ri, ds in enumerate(datasets, start=1):
+        most_blind, most_aware = examples_by_dataset[ds]
+        mols = mols_by_dataset[ds]
+        y = y_by_dataset[ds]
 
+        # Dataset label column
         ax_label = fig.add_subplot(gs[ri, 0])
         ax_label.axis("off")
         ax_label.text(
-            0.05, 0.55, most.name,
+            0.5, 0.5, ds,
             transform=ax_label.transAxes,
-            fontsize=11, fontweight="bold", color=color,
-            ha="left", va="center",
-        )
-        ax_label.text(
-            0.05, 0.30, group,
-            transform=ax_label.transAxes,
-            fontsize=8.5, color=color, ha="left", va="center",
+            fontsize=11, fontweight="bold", color="black",
+            ha="center", va="center", wrap=True,
         )
 
-        # Most cliff-blind
-        ax_m_mol = fig.add_subplot(gs[ri, 1])
-        ax_m_metrics = fig.add_subplot(gs[ri, 2])
-        m_lines = [
-            (f"FP similarity = {most.similarity:.2f}", True),
-            (f"|\u0394pKi| = {most.delta_y:.2f}", False),
-            (f"({_format_fold(most.delta_y)} potency)", False),
-            (f"graph distance = {most.graph_distance}", False),
-        ]
-        most_diff = mcs_diff_atoms(mols[most.i], mols[most.j])
-        most_hl_a, most_hl_b = (
-            (most_diff[0], most_diff[1]) if most_diff is not None else (None, None)
-        )
-        _draw_pair_cell(
-            ax_m_mol, ax_m_metrics,
-            mols[most.i], mols[most.j],
-            float(y[most.i]), float(y[most.j]),
-            m_lines,
-            highlight_a=most_hl_a,
-            highlight_b=most_hl_b,
-        )
+        # Most cliff-blind columns
+        for ci in range(n_blind_cols):
+            ax = fig.add_subplot(gs[ri, 1 + ci])
+            if ci < len(most_blind):
+                _draw_example_panel(ax, most_blind[ci], mols, y)
+            else:
+                _draw_no_example_panel(ax)
 
-        # Least cliff-blind
-        ax_l_mol = fig.add_subplot(gs[ri, 3])
-        ax_l_metrics = fig.add_subplot(gs[ri, 4])
-        l_lines = [
-            (f"FP similarity = {least.similarity:.2f}", True),
-            (f"|\u0394pKi| = {least.delta_y:.2f}", False),
-            (f"({_format_fold(least.delta_y)} potency)", False),
-            (f"graph distance = {least.graph_distance}", False),
-        ]
-        least_diff = mcs_diff_atoms(mols[least.i], mols[least.j])
-        least_hl_a, least_hl_b = (
-            (least_diff[0], least_diff[1]) if least_diff is not None else (None, None)
-        )
-        _draw_pair_cell(
-            ax_l_mol, ax_l_metrics,
-            mols[least.i], mols[least.j],
-            float(y[least.i]), float(y[least.j]),
-            l_lines,
-            highlight_a=least_hl_a,
-            highlight_b=least_hl_b,
-        )
+        # Most cliff-aware columns
+        for ci in range(n_aware_cols):
+            ax = fig.add_subplot(gs[ri, 1 + n_blind_cols + ci])
+            if ci < len(most_aware):
+                _draw_example_panel(ax, most_aware[ci], mols, y)
+            else:
+                _draw_no_example_panel(ax)
 
     if title:
-        fig.suptitle(title, fontsize=14, y=0.995)
+        fig.suptitle(title, fontsize=14, y=0.995, color=color, fontweight="bold")
 
     fig.subplots_adjust(
-        top=0.96 if title else 0.99,
-        bottom=0.01,
+        top=0.94 if title else 0.99,
+        bottom=0.02,
         left=0.005, right=0.995,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -341,6 +295,72 @@ def plot_cliff_examples(
     plt.close(fig)
     logger.info(f"wrote {out_path}")
     return out_path
+
+
+def _draw_example_panel(
+    ax,
+    ex: CliffExamplePair,
+    mols: list[Mol],
+    y: np.ndarray,
+) -> None:
+    """Draw one mol-pair panel (single Axes) with metric annotations on top."""
+    diff = mcs_diff_atoms(mols[ex.i], mols[ex.j])
+    hl_a, hl_b = (diff if diff is not None else (None, None))
+    img = _draw_pair_image(
+        mols[ex.i], mols[ex.j],
+        highlight_a=hl_a, highlight_b=hl_b,
+    )
+    ax.imshow(img)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#cccccc")
+        spine.set_linewidth(0.5)
+
+    # Metrics above the structures, two lines so they don't run together
+    fold = _format_fold(ex.delta_y)
+    line1 = f"sim = {ex.similarity:.2f}"
+    line2 = f"|\u0394pKi| = {ex.delta_y:.2f} ({fold}),  gd = {ex.graph_distance}"
+    ax.text(
+        0.5, 1.16, line1,
+        transform=ax.transAxes,
+        fontsize=10, ha="center", va="bottom",
+        fontweight="bold",
+    )
+    ax.text(
+        0.5, 1.02, line2,
+        transform=ax.transAxes,
+        fontsize=8.5, ha="center", va="bottom",
+        color="#444444",
+    )
+
+    # pKi labels under the two molecules
+    ax.text(
+        0.25, -0.04, f"pKi={float(y[ex.i]):.2f}",
+        transform=ax.transAxes,
+        fontsize=8.5, ha="center", va="top",
+    )
+    ax.text(
+        0.75, -0.04, f"pKi={float(y[ex.j]):.2f}",
+        transform=ax.transAxes,
+        fontsize=8.5, ha="center", va="top",
+    )
+
+
+def _draw_no_example_panel(ax) -> None:
+    """Placeholder when a dataset has fewer cliff pairs than n_top."""
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_facecolor("#f5f5f5")
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#cccccc")
+        spine.set_linewidth(0.5)
+    ax.text(
+        0.5, 0.5, "(none)",
+        transform=ax.transAxes,
+        fontsize=10, ha="center", va="center",
+        color="#888888", style="italic",
+    )
 
 
 @typechecked

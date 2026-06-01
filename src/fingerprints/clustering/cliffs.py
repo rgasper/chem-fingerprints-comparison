@@ -101,13 +101,27 @@ def _composition_l1(a: dict[str, int], b: dict[str, int]) -> int:
 
 
 def _mcs_atoms(mol_i: Mol, mol_j: Mol, timeout: int = 2) -> int | None:
-    """Return MCS atom count or None if MCS computation is canceled."""
+    """Return MCS atom count or None if MCS computation is canceled.
+
+    Settings:
+        - atomCompare=CompareElements: distinct elements never match.
+        - bondCompare=CompareOrderExact: aromatic bonds match aromatic
+          only, single matches single, etc.
+        - completeRingsOnly=False: allow partial ring matches so that
+          ring contraction / expansion (size 5 vs 6 ring of same scaffold)
+          is admitted.
+        - ringMatchesRingOnly=True: an atom in a ring can only match an
+          atom in a ring. Without this, a long carbon chain matches the
+          atoms of a ring of the same size, falsely calling open-vs-
+          cyclic pairs structurally similar.
+    """
     res = rdFMCS.FindMCS(
         [mol_i, mol_j],
         timeout=timeout,
         atomCompare=rdFMCS.AtomCompare.CompareElements,
         bondCompare=rdFMCS.BondCompare.CompareOrderExact,
         completeRingsOnly=False,
+        ringMatchesRingOnly=True,
     )
     if res.canceled:
         return None
@@ -129,6 +143,7 @@ def mcs_diff_atoms(
         atomCompare=rdFMCS.AtomCompare.CompareElements,
         bondCompare=rdFMCS.BondCompare.CompareOrderExact,
         completeRingsOnly=False,
+        ringMatchesRingOnly=True,
     )
     if res.canceled:
         return None
@@ -335,7 +350,7 @@ def cliff_similarity_for_all(
 class CliffExamplePair:
     """A single cliff pair selected as an illustration for one fingerprint.
 
-    Used for the "most cliff-blind" / "least cliff-blind" example figure.
+    Used for the per-fingerprint deep-dive example figures.
     """
 
     name: str
@@ -350,40 +365,54 @@ class CliffExamplePair:
 def select_cliff_examples(
     fp: FingerprintResult,
     cliff_pairs: list[CliffPair],
-) -> tuple[CliffExamplePair, CliffExamplePair]:
-    """Return (most_cliff_blind, least_cliff_blind) for this fingerprint.
+    n_top: int = 3,
+) -> tuple[list[CliffExamplePair], list[CliffExamplePair]]:
+    """Return (most_cliff_blind, most_cliff_aware) lists for this fingerprint.
 
-    Most cliff-blind = the cliff pair this FP scored highest. Worst case
-    where the FP failed to discriminate.
+    most_cliff_blind: the n_top cliff pairs with the highest FP similarity.
+        These are the FP's worst-case misses - cases where it scored a true
+        activity cliff as very similar.
 
-    Least cliff-blind = the cliff pair this FP scored lowest. Best case
-    where the FP correctly recognized the difference.
+    most_cliff_aware: the n_top cliff pairs with the lowest FP similarity.
+        These are the FP's best catches - cases where it correctly
+        recognized cliff pairs as different.
+
+    Both lists are returned in descending order of "extremeness": index 0
+    is the single most blind / most aware example, index n_top-1 is the
+    third most.
     """
     if not cliff_pairs:
         raise ValueError("cliff_pairs is empty")
+    if n_top < 1:
+        raise ValueError(f"n_top must be >= 1, got {n_top}")
     sims = cliff_similarities(fp, cliff_pairs)
-    idx_max = int(np.argmax(sims))
-    idx_min = int(np.argmin(sims))
-    p_max = cliff_pairs[idx_max]
-    p_min = cliff_pairs[idx_min]
-    most = CliffExamplePair(
-        name=fp.name, i=p_max.i, j=p_max.j,
-        similarity=float(sims[idx_max]),
-        delta_y=p_max.delta_y,
-        graph_distance=p_max.graph_distance,
-    )
-    least = CliffExamplePair(
-        name=fp.name, i=p_min.i, j=p_min.j,
-        similarity=float(sims[idx_min]),
-        delta_y=p_min.delta_y,
-        graph_distance=p_min.graph_distance,
-    )
-    return most, least
+    n_top = min(n_top, len(cliff_pairs))
+
+    # Indices sorted by similarity (ascending) and (descending)
+    order_asc = np.argsort(sims, kind="stable")
+    order_desc = order_asc[::-1]
+
+    def _make(idx: int) -> CliffExamplePair:
+        p = cliff_pairs[idx]
+        return CliffExamplePair(
+            name=fp.name, i=p.i, j=p.j,
+            similarity=float(sims[idx]),
+            delta_y=p.delta_y,
+            graph_distance=p.graph_distance,
+        )
+
+    most_blind = [_make(int(order_desc[k])) for k in range(n_top)]
+    most_aware = [_make(int(order_asc[k])) for k in range(n_top)]
+    return most_blind, most_aware
 
 
 @typechecked
 def select_cliff_examples_for_all(
     fps: dict[str, FingerprintResult],
     cliff_pairs: list[CliffPair],
-) -> dict[str, tuple[CliffExamplePair, CliffExamplePair]]:
-    return {sid: select_cliff_examples(fp, cliff_pairs) for sid, fp in fps.items()}
+    n_top: int = 3,
+) -> dict[str, tuple[list[CliffExamplePair], list[CliffExamplePair]]]:
+    return {
+        sid: select_cliff_examples(fp, cliff_pairs, n_top=n_top)
+        for sid, fp in fps.items()
+    }
