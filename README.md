@@ -1,5 +1,7 @@
 # Comparing classical and neural molecular fingerprints
 
+Disclaimer - a lot of LLM help here.
+
 Eight fingerprints (six classical RDKit + two neural) probed across six lenses. The point is not to crown a winner — it's to show how different the fingerprints actually are, and where each one's blind spots hide.
 
 ## Fingerprints studied
