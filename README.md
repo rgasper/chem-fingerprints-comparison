@@ -68,6 +68,31 @@ Per-fingerprint deep-dive figures are in [`figures/cliffs/`](figures/cliffs/) �
 
 The pattern across the eight: **dynamic range correlates with cliff resolution**. Morgan's similarity distribution spans 0.0–1.0 over diverse pairs and gives it room to drop low on cliffs; MIST's distribution is squeezed into roughly 0.7–1.0 over the same molecule space, so it can't distinguish "structurally similar but functionally different" from "structurally similar and functionally similar."
 
+### Concrete pair-level examples
+
+Two figure families let you eyeball what each FP is actually doing: hand-picked pair heatmaps in [`figures/pairs/`](figures/pairs/) (four pairs designed to vary scaffold and decoration independently, drawn at both small-molecule and drug-sized scales) and the per-FP cliff example panels in [`figures/cliffs/`](figures/cliffs/) (top-3 most cliff-blind and top-3 most cliff-aware molecule pairs across the three ChEMBL targets).
+
+The drug-sized pair heatmap for Morgan is a useful tour of its dynamic range:
+
+![Morgan drug-sized pair heatmap](figures/pairs/drug/01_pair_similarity_morgan.png)
+
+Reading the diagonal blocks (the four hand-picked pairs):
+
+- **Pair A (4-Cl-aniline-Q × 4-Br-aniline-Q, halogen swap on a shared 4-aminoquinazoline scaffold):** 0.71. Morgan registers the halogen-swap fingerprint difference, but most of the atom-environment bits are shared.
+- **Pair B (aniline-Q × gefitinib, same 4-aminoquinazoline scaffold but minimal vs heavily decorated):** 0.30. Once enough atom environments around the scaffold change (methoxy, morpholinopropoxy, halogenated aniline), Morgan's similarity drops sharply — even though both molecules share the full quinazoline core.
+- **Pair C (decorated naphthalene × decorated biphenyl, different scaffolds with shared OMe / Cl / N-methyl-amide decorations):** 0.43. The decorations contribute matching atom-environment bits; the scaffold difference pulls similarity down but doesn't crush it.
+- **Pair D (celecoxib × telmisartan-like, fully different):** 0.11. The expected near-zero floor.
+
+The off-diagonal entries are also telling — the two pair-A members each score 0.75 against aniline-Q from pair B, because all three molecules share the 4-aminoquinazoline core. So Morgan rewards shared cores when they dominate the molecule (small minor-variant × small parent: 0.75) but not when one side is heavily decorated and the core no longer dominates the bit count (small parent × gefitinib: 0.30). This nuance — "Morgan is sensitive to *what fraction* of the molecule is shared, not just whether a key motif is shared" — is hard to see from any aggregate metric.
+
+The cliff-examples figure for Morgan does the same thing on real activity cliffs:
+
+![Morgan cliff examples](figures/cliffs/02_cliff_examples_morgan.png)
+
+The "most cliff-blind" column (left) is the failure mode: pairs Morgan scores 0.86–1.00 that nonetheless differ by 100×–500× in Ki. They're the cases where the change is genuinely tiny (graph distance 1–3, often a halogen swap or single-atom relocation in a polycyclic core). On Thrombin — the hardest target — even the 1.00 case is two visibly distinct macrocycles whose Morgan environments collide. The "most cliff-aware" column (right) is the success mode: pairs at sim 0.11–0.35 that Morgan correctly flags as different despite being defined as cliffs by graph distance ≤ 5.
+
+The other six classical FPs and two neural FPs each have their own pair heatmap and cliff-examples figure following the same layout — see the linked folders for the full set. Reading them by eye is the fastest way to develop intuition for what kinds of changes a given FP is and isn't sensitive to.
+
 ### CheMeleon and MIST are different in other ways though
 
 Lumping them as "the neural FPs" still misleads on every probe except cliffs:
@@ -120,11 +145,6 @@ The pair plots already hinted at this — even on four hand-picked pairs the cla
 - **MACCS** has only 167 bits — distinct molecules collide more often, and small-change activity cliffs almost always come out high-similarity (cliff-blind rate 0.81 on D3, 0.96–0.98 on Thrombin / GSK-3β).
 - **MIST and CheMeleon cosine scores are NOT on the same scale as Tanimoto, and there is no fixed cross-dataset threshold to substitute.** Cosine 0.4 between two MIST embeddings does not mean what 0.4 Tanimoto means. The cliff-pair probe makes this concrete: MIST median similarity over D3 cliff pairs is 0.95 (Morgan's is 0.43). Tanimoto rules of thumb ("≥ 0.7 = similar") simply do not transfer. Rank-based alternatives (percentile within a dataset's own pairwise-similarity distribution, PR-AUC of cliff-vs-non-cliff separation) are scale-invariant within a dataset but their cutoffs are set by that dataset's composition — a scaffold-diverse library and a congeneric series produce very different "top 5%" thresholds. So the practical guidance is: for binary FPs, Tanimoto thresholds carry across datasets reasonably well; for neural FPs, calibrate per use case using a small held-out set with the property you actually care about.
 - **CheMeleon similarity is "chemistry-aware" but not biology-aware.** It scores activity cliffs at median similarity 0.90 on D3 — chemically the molecules in a cliff pair really are very similar, and CheMeleon agrees. It just doesn't know that small chemical change can imply huge potency change.
-- **Morgan's "two molecules share a key motif" failure mode** is real: two compounds can both light up the same Morgan bit while differing globally. The drug-sized pair heatmap shows this — 0.75 Tanimoto between aniline-quinazoline and gefitinib, driven entirely by their shared core:
-
-  ![Morgan drug-sized pair heatmap](figures/pairs/drug/01_pair_similarity_morgan.png)
-
-  Conversely, on properly-defined cliffs (small change → big activity change) Morgan is the best discriminator we tested — its bit-vector resolution captures small modifications well.
 
 ## Practical takeaway
 
