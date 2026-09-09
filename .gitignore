@@ -16,5 +16,8 @@ wheels/
 session-*.md
 marimo.log
 
+# marimo auto-generated view layouts (grid/slides) - notebook uses default layout
+layouts/
+
 # macOS
 .DS_Store
