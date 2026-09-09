@@ -6,9 +6,10 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import altair as alt
     import marimo as mo
 
-    return (mo,)
+    return alt, mo
 
 
 @app.cell
@@ -107,7 +108,7 @@ def _(current_mol, mo, mol_valid, mx):
     if mol_valid:
         _svg = mx.highlight_svg(
             current_mol,
-            mx.BitHit(bit=-1, is_on=False, smarts=None, name="", match_count=0, atoms=(), bonds=()),
+            mx.blank_hit(),
             width=360,
             height=260,
         )
@@ -125,63 +126,140 @@ def _(mo):
 
     MACCS keys are the friendliest fingerprint to learn from: a fixed list of
     **166 predefined structural questions** ("is there a carbonyl?", "an aromatic
-    ring?", "a chlorine?"). Each question is a
+    ring?", "a chlorine?"). Most questions are written as a
     [SMARTS](https://www.daylight.com/dayhtml/doc/theory/theory.smarts.html)
-    pattern; a bit is **1** if the molecule contains that substructure. That's the
-    whole fingerprint: a 166-long yes/no checklist.
+    pattern; a bit is **1** if the molecule contains that substructure. A handful
+    of keys are *count-based* — they only turn on past a threshold (e.g. "more
+    than 3 oxygens") — and three keys are *special*, computed directly rather
+    than by pattern-matching. That's the whole fingerprint: a 166-long checklist.
 
-    Because every bit *is* a named substructure, we can point at exactly which
-    atoms answered "yes." **Scrub the slider** to walk through the bits that are
-    ON for the active molecule and watch the matching substructure highlight.
+    Because every bit *is* a named substructure, we can describe each one in
+    **plain English**, show the **pattern it's looking for** (drawn from its
+    definition, independent of any molecule), point to **where it matches** on
+    the active molecule, and mark where the bit sits within the **whole
+    fingerprint**. Scrub through all 166 keys — the ones that are *on* tell you
+    what the molecule has, and the *off* ones are just as informative: they tell
+    you what it's **missing**. (The terse original SMARTS is tucked under
+    "Technical details" — nobody reads those at a glance anyway.)
     """)
     return
 
 
 @app.cell
-def _(current_mol, mo, mol_valid, mx):
-    if mol_valid:
-        _on = mx.on_bits(current_mol)
-    else:
-        _on = []
-    on_bit_list = _on
-
-    if _on:
+def _(mo, mol_valid, mx):
+    # Always scrub all 166 MACCS keys, in order, so OFF bits are explorable too.
+    scrub_bits = mx.all_bits() if mol_valid else []
+    if scrub_bits:
         bit_slider = mo.ui.slider(
             start=0,
-            stop=len(_on) - 1,
+            stop=len(scrub_bits) - 1,
             value=0,
-            label=f"Scrub the {len(_on)} MACCS bits that are ON",
+            label="Scrub all 166 MACCS keys",
             full_width=True,
             show_value=False,
         )
     else:
         bit_slider = mo.ui.slider(start=0, stop=0, value=0, label="(no molecule)")
     bit_slider
-    return bit_slider, on_bit_list
+    return bit_slider, scrub_bits
 
 
 @app.cell
-def _(bit_slider, current_mol, mo, mol_valid, mx, on_bit_list):
-    if mol_valid and on_bit_list:
-        _bit = on_bit_list[bit_slider.value]
+def _(bit_slider, current_mol, mo, mol_valid, mx, scrub_bits):
+    if mol_valid and scrub_bits:
+        _bit = scrub_bits[bit_slider.value]
         _hit = mx.bit_hit(current_mol, _bit)
-        _svg = mx.highlight_svg(current_mol, _hit, width=460, height=340)
-        _smarts_line = (
-            f"**SMARTS:** `{_hit.smarts}`"
-            if _hit.smarts
-            else "*count-based key (no SMARTS pattern)*"
-        )
-        _card = mo.vstack(
+        _query = mx.query_svg(_bit, width=240, height=190)
+
+        # Show where it matches (ON) or the plain molecule (OFF). The match/OFF
+        # state is already spelled out in the match line below, so no separate
+        # "present" badge is needed — it would be redundant.
+        if _hit.is_on:
+            _mol_svg = mx.highlight_svg(current_mol, _hit, width=460, height=340)
+            _mol_panel = mo.vstack([mo.md("**Where it matches:**"), mo.Html(_mol_svg)])
+        else:
+            _mol_svg = mx.highlight_svg(current_mol, mx.blank_hit(), width=460, height=340)
+            _mol_panel = mo.vstack(
+                [
+                    mo.md("**Not present** — the molecule is shown plain:"),
+                    mo.Html(_mol_svg),
+                ]
+            )
+
+        # "What the bit looks for": the SMARTS query depiction, or — for the
+        # three procedurally-computed keys — a plain-language explanation.
+        if _query is not None:
+            _query_panel = mo.vstack(
+                [mo.md("**What this bit looks for:**"), mo.Html(_query)]
+            )
+        else:
+            _query_panel = mo.vstack(
+                [
+                    mo.md("**What this bit looks for:**"),
+                    mo.md(mx.describe_special(_bit) or "*No drawable pattern.*").callout(
+                        kind="info"
+                    ),
+                ]
+            )
+
+        # Headline the plain-English description; tuck the terse SMARTS and the
+        # official MDL key definition into an expandable "technical details" pane
+        # so nobody has to parse a SMARTS string to understand the bit.
+        if _hit.is_special:
+            _match_line = mo.md(
+                "*Special key — RDKit computes this one directly instead of by "
+                "matching a SMARTS pattern (see explanation at right).*"
+            )
+            _details = mo.accordion(
+                {
+                    "Technical details": mo.md(
+                        f"**Official MACCS key:** `{_hit.official}`  \n"
+                        "**SMARTS:** *(none — computed procedurally)*"
+                    )
+                }
+            )
+        else:
+            if _hit.threshold > 0:
+                _match_line = mo.md(
+                    f"This key needs **more than {_hit.threshold}** matches to turn "
+                    f"on. Found **{_hit.match_count}** → "
+                    f"{'**ON**' if _hit.is_on else '**OFF**'}."
+                )
+            else:
+                _match_line = mo.md(f"Matches in this molecule: **{_hit.match_count}**")
+            _details = mo.accordion(
+                {
+                    "Technical details": mo.md(
+                        f"**Official MACCS key:** `{_hit.official}`  \n"
+                        f"**SMARTS:** `{_hit.smarts}`"
+                    )
+                }
+            )
+
+        _header = mo.vstack(
             [
                 mo.md(f"### Bit {_hit.bit} · {_hit.name}"),
-                mo.md(_smarts_line),
-                mo.md(
-                    f"Matches in this molecule: **{_hit.match_count}** "
-                    f"(highlighted atoms: {len(_hit.atoms)})"
-                ),
+                _match_line,
+                _details,
             ]
         )
-        _view = mo.hstack([mo.Html(_svg), _card], justify="start", gap=2, widths=[1, 1])
+        # The strip goes below the molecule image (same layout as Morgan): it's
+        # easier to parse the full-fingerprint context after seeing the match.
+        _strip = mx.fingerprint_strip_svg(current_mol, _bit, width=920, height=44)
+        _strip_legend = mo.md(
+            '<span style="color:#2f9e44">█ on</span> &nbsp; '
+            '<span style="color:#adb5bd">░ off</span> &nbsp; '
+            '<span style="color:#1c7ed6">█ current bit</span>'
+        )
+        _view = mo.vstack(
+            [
+                _header,
+                mo.hstack([_query_panel, _mol_panel], justify="start", gap=2, widths=[1, 2]),
+                mo.md("**Where this bit sits in the whole 166-bit fingerprint:**"),
+                mo.Html(_strip),
+                _strip_legend,
+            ]
+        )
     else:
         _view = mo.md("*Select a valid molecule to explore its MACCS bits.*")
     _view
@@ -267,6 +345,167 @@ def _(current_mol, me, mo, mol_valid, morgan_on_bits, morgan_slider):
 
 
 @app.cell
+def _(current_mol, me, mo, mol_valid, morgan_on_bits, morgan_slider):
+    # Same strip idea as MACCS, but Morgan is long (2048) and sparse: an OFF bit
+    # means "no environment happened to hash here" — it has no specific meaning,
+    # so the scrubber only visits ON bits and the strip is mostly blank.
+    if mol_valid and morgan_on_bits:
+        _bit = morgan_on_bits[morgan_slider.value]
+        _strip = me.fingerprint_strip_svg(current_mol, _bit, width=920, height=36)
+        _legend = mo.md(
+            '<span style="color:#2f9e44">█ on</span> &nbsp; '
+            '<span style="color:#1c7ed6">█ current bit</span> &nbsp; '
+            "the rest is off"
+        )
+        _note = mo.md(
+            f"Only **{len(morgan_on_bits)} of 2048** bits are on — Morgan vectors "
+            "are *sparse*. Unlike MACCS, an off bit here carries no meaning of its "
+            "own (it just means no atom environment hashed to that slot), so the "
+            "scrubber skips straight between the on bits."
+        )
+        _view = mo.vstack(
+            [mo.md("**The whole 2048-bit fingerprint:**"), mo.Html(_strip), _legend, _note]
+        )
+    else:
+        _view = mo.md("")
+    _view
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### Why is Morgan 2048 bits long? Hash collisions.
+
+    Morgan has *no* fixed vocabulary, so it can't reserve a slot per feature the
+    way MACCS does. Instead it **hashes** each atom environment into one of a
+    fixed number of bits. When two *different* environments hash to the **same**
+    bit, that's a **collision** — the fingerprint literally cannot tell them
+    apart anymore.
+
+    Let's *see* it. Below we deliberately fold the active molecule into an
+    absurdly short **8-bit** Morgan fingerprint and find the bits that ended up
+    shared. Each colored region is a **different** substructure — but the short
+    fingerprint records them all as the *same* single bit. Scrub through the
+    collisions:
+    """)
+    return
+
+
+@app.cell
+def _(current_mol, me, mo, mol_valid):
+    _SHORT = 8
+    _collisions = me.find_collisions(current_mol, n_bits=_SHORT) if mol_valid else []
+    if _collisions:
+        collision_slider = mo.ui.slider(
+            start=0,
+            stop=len(_collisions) - 1,
+            value=0,
+            label=f"Scrub the {len(_collisions)} colliding bits at {_SHORT} bits",
+            full_width=True,
+            show_value=False,
+        )
+    else:
+        collision_slider = mo.ui.slider(start=0, stop=0, value=0, label="(no collisions)")
+    short_collisions = _collisions
+    return collision_slider, short_collisions
+
+
+@app.cell
+def _(collision_slider, current_mol, me, mo, mol_valid, short_collisions):
+    _PALETTE_HEX = ["#e64d3d", "#338cf2", "#33a659", "#d98c1a", "#9959cc"]
+    if not mol_valid:
+        _view = mo.md("*Select a valid molecule.*")
+    elif not short_collisions:
+        _view = mo.md(
+            "This molecule has so few atom environments that **none of them "
+            "collide** even at 8 bits — try a bigger drug-like molecule from "
+            "the selector (e.g. Gefitinib or Imatinib)."
+        ).callout(kind="info")
+    else:
+        _col = short_collisions[collision_slider.value]
+        _svg = me.collision_svg(current_mol, _col, width=520, height=380)
+        # One legend row per colliding environment, colored to match the drawing.
+        _rows = []
+        for _i, _sig in enumerate(_col.signatures):
+            _c = _PALETTE_HEX[_i % len(_PALETTE_HEX)]
+            _label = _sig.replace("atom:", "single atom ")
+            _rows.append(f'<span style="color:{_c}">█</span> `{_label}`')
+        _legend = mo.md("  \n".join(_rows))
+        _card = mo.vstack(
+            [
+                mo.md(f"### Bit {_col.bit} at 8 bits"),
+                mo.md(
+                    f"**{_col.n_distinct} different substructures** all hash to this "
+                    "one bit. To the fingerprint they are indistinguishable:"
+                ),
+                _legend,
+                mo.md(
+                    "*In a 2048-bit fingerprint these would (almost always) land "
+                    "on separate bits — that extra length is what buys the "
+                    "resolution.*"
+                ),
+            ]
+        )
+        _view = mo.hstack([mo.Html(_svg), _card], justify="start", gap=2, widths=[3, 2])
+    _view
+    return
+
+
+@app.cell
+def _(alt, current_mol, me, mo, mol_valid):
+    # Collision rate as the vector lengthens: the payoff of a longer fingerprint.
+    if mol_valid:
+        _curve = me.collision_curve(current_mol)
+        _distinct = _curve[0].distinct_envs
+        _rows = [
+            {
+                "length": cp.n_bits,
+                "rate": round(100 * cp.collisions / cp.distinct_envs, 1)
+                if cp.distinct_envs
+                else 0.0,
+            }
+            for cp in _curve
+        ]
+        _chart = (
+            alt.Chart(alt.Data(values=_rows))
+            .mark_line(point=True, color="#e8590c")
+            .encode(
+                x=alt.X(
+                    "length:O",
+                    title="fingerprint length (bits)",
+                    sort=[str(cp.n_bits) for cp in _curve],
+                ),
+                y=alt.Y(
+                    "rate:Q",
+                    title="collision rate (%)",
+                    scale=alt.Scale(domain=[0, 100]),
+                ),
+                tooltip=[
+                    alt.Tooltip("length:O", title="bits"),
+                    alt.Tooltip("rate:Q", title="collision rate %"),
+                ],
+            )
+            .properties(height=200, title="Collision rate vs. fingerprint length")
+        )
+        _view = mo.vstack(
+            [
+                mo.ui.altair_chart(_chart),
+                mo.md(
+                    f"This molecule has **{_distinct} distinct atom environments**. "
+                    "The rate falls off fast — which is why **2048 bits** is a common "
+                    "default: long enough that collisions are rare, short enough to "
+                    "stay cheap."
+                ),
+            ]
+        )
+    else:
+        _view = mo.md("")
+    _view
+    return
+
+
+@app.cell
 def _(mo):
     mo.md(r"""
     Flip between the MACCS explorer above and this one on the **same molecule**:
@@ -296,9 +535,7 @@ def _(mo):
 
 
 @app.cell
-def _(current_mol, mo, mol_valid):
-    import altair as alt
-
+def _(alt, current_mol, mo, mol_valid):
     from fingerprints import fp_overview as ov
 
     if mol_valid:
