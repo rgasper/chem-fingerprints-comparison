@@ -14,6 +14,7 @@ wheels/
 
 # Session logs
 session-*.md
+marimo.log
 
 # macOS
 .DS_Store
