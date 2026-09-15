@@ -135,3 +135,95 @@ Total estimated model params size (MB): 1.274
 Modules in train mode: 24                                                       
 Modules in eval mode: 0                                                         
 Total FLOPs: 0                                                                  
+`Trainer.fit` stopped: `max_epochs=30` reached.
+2026-09-15 19:01:37.398 | INFO     | __main__:run_pair:70 -   alpha=0.25 seed=2: R2_a=0.436 R2_b=0.392
+GPU available: True (mps), used: False
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+Loading `train_dataloader` to estimate number of stepping batches.
+┏━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃   ┃ Name            ┃ Type               ┃ Params ┃ Mode  ┃ FLOPs ┃
+┡━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ 0 │ message_passing │ BondMessagePassing │  227 K │ train │     0 │
+│ 1 │ agg             │ MeanAggregation    │      0 │ train │     0 │
+│ 2 │ bn              │ Identity           │      0 │ train │     0 │
+│ 3 │ predictor       │ RegressionFFN      │ 90.9 K │ train │     0 │
+│ 4 │ X_d_transform   │ Identity           │      0 │ train │     0 │
+│ 5 │ metrics         │ ModuleList         │      0 │ train │     0 │
+└───┴─────────────────┴────────────────────┴────────┴───────┴───────┘
+Trainable params: 318 K                                                         
+Non-trainable params: 0                                                         
+Total params: 318 K                                                             
+Total estimated model params size (MB): 1.274                                   
+Modules in train mode: 24                                                       
+Modules in eval mode: 0                                                         
+Total FLOPs: 0                                                                  
+`Trainer.fit` stopped: `max_epochs=30` reached.
+2026-09-15 19:49:13.401 | INFO     | __main__:run_pair:70 -   alpha=0.5 seed=0: R2_a=0.488 R2_b=0.467
+GPU available: True (mps), used: False
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+Loading `train_dataloader` to estimate number of stepping batches.
+┏━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃   ┃ Name            ┃ Type               ┃ Params ┃ Mode  ┃ FLOPs ┃
+┡━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ 0 │ message_passing │ BondMessagePassing │  227 K │ train │     0 │
+│ 1 │ agg             │ MeanAggregation    │      0 │ train │     0 │
+│ 2 │ bn              │ Identity           │      0 │ train │     0 │
+│ 3 │ predictor       │ RegressionFFN      │ 90.9 K │ train │     0 │
+│ 4 │ X_d_transform   │ Identity           │      0 │ train │     0 │
+│ 5 │ metrics         │ ModuleList         │      0 │ train │     0 │
+└───┴─────────────────┴────────────────────┴────────┴───────┴───────┘
+Trainable params: 318 K                                                         
+Non-trainable params: 0                                                         
+Total params: 318 K                                                             
+Total estimated model params size (MB): 1.274                                   
+Modules in train mode: 24                                                       
+Modules in eval mode: 0                                                         
+Total FLOPs: 0                                                                  
+`Trainer.fit` stopped: `max_epochs=30` reached.
+2026-09-15 19:50:35.178 | INFO     | __main__:run_pair:70 -   alpha=0.5 seed=1: R2_a=0.477 R2_b=0.507
+GPU available: True (mps), used: False
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+Loading `train_dataloader` to estimate number of stepping batches.
+┏━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃   ┃ Name            ┃ Type               ┃ Params ┃ Mode  ┃ FLOPs ┃
+┡━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ 0 │ message_passing │ BondMessagePassing │  227 K │ train │     0 │
+│ 1 │ agg             │ MeanAggregation    │      0 │ train │     0 │
+│ 2 │ bn              │ Identity           │      0 │ train │     0 │
+│ 3 │ predictor       │ RegressionFFN      │ 90.9 K │ train │     0 │
+│ 4 │ X_d_transform   │ Identity           │      0 │ train │     0 │
+│ 5 │ metrics         │ ModuleList         │      0 │ train │     0 │
+└───┴─────────────────┴────────────────────┴────────┴───────┴───────┘
+Trainable params: 318 K                                                         
+Non-trainable params: 0                                                         
+Total params: 318 K                                                             
+Total estimated model params size (MB): 1.274                                   
+Modules in train mode: 24                                                       
+Modules in eval mode: 0                                                         
+Total FLOPs: 0                                                                  
+`Trainer.fit` stopped: `max_epochs=30` reached.
+2026-09-15 19:52:03.750 | INFO     | __main__:run_pair:70 -   alpha=0.5 seed=2: R2_a=0.443 R2_b=0.409
+GPU available: True (mps), used: False
+TPU available: False, using: 0 TPU cores
+💡 Tip: For seamless cloud logging and experiment tracking, try installing [litlogger](https://pypi.org/project/litlogger/) to enable LitLogger, which logs metrics and artifacts automatically to the Lightning Experiments platform.
+Loading `train_dataloader` to estimate number of stepping batches.
+┏━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┳━━━━━━━┓
+┃   ┃ Name            ┃ Type               ┃ Params ┃ Mode  ┃ FLOPs ┃
+┡━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━╇━━━━━━━┩
+│ 0 │ message_passing │ BondMessagePassing │  227 K │ train │     0 │
+│ 1 │ agg             │ MeanAggregation    │      0 │ train │     0 │
+│ 2 │ bn              │ Identity           │      0 │ train │     0 │
+│ 3 │ predictor       │ RegressionFFN      │ 90.9 K │ train │     0 │
+│ 4 │ X_d_transform   │ Identity           │      0 │ train │     0 │
+│ 5 │ metrics         │ ModuleList         │      0 │ train │     0 │
+└───┴─────────────────┴────────────────────┴────────┴───────┴───────┘
+Trainable params: 318 K                                                         
+Non-trainable params: 0                                                         
+Total params: 318 K                                                             
+Total estimated model params size (MB): 1.274                                   
+Modules in train mode: 24                                                       
+Modules in eval mode: 0                                                         
+Total FLOPs: 0                                                                  

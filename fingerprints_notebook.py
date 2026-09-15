@@ -332,9 +332,9 @@ def _(current_mol, me, mo, mol_valid):
 def _(collision_slider, current_mol, me, mo, mol_valid, short_collisions):
     _PALETTE_HEX = ["#e64d3d", "#338cf2", "#33a659", "#d98c1a", "#9959cc"]
     if not mol_valid:
-        _view = mo.md("*Select a valid molecule.*")
+        collision_card = mo.md("*Select a valid molecule.*")
     elif not short_collisions:
-        _view = mo.md(
+        collision_card = mo.md(
             "This molecule has so few atom environments that **none of them "
             "collide** even at 8 bits — try a bigger drug-like molecule from "
             "the selector (e.g. Gefitinib or Imatinib)."
@@ -364,9 +364,8 @@ def _(collision_slider, current_mol, me, mo, mol_valid, short_collisions):
                 ),
             ]
         )
-        _view = mo.hstack([mo.Html(_svg), _card], justify="start", gap=2, widths=[3, 2])
-    _view
-    return
+        collision_card = mo.hstack([mo.Html(_svg), _card], justify="start", gap=2, widths=[3, 2])
+    return (collision_card,)
 
 
 @app.cell
@@ -407,7 +406,7 @@ def _(alt, current_mol, me, mo, mol_valid, pd):
             )
             .properties(height=200, title="Collision rate vs. fingerprint length")
         )
-        _view = mo.vstack(
+        collision_curve_view = mo.vstack(
             [
                 mo.as_html(_chart),
                 mo.md(
@@ -419,8 +418,31 @@ def _(alt, current_mol, me, mo, mol_valid, pd):
             ]
         )
     else:
-        _view = mo.md("")
-    _view
+        collision_curve_view = mo.md("")
+    return (collision_curve_view,)
+
+
+@app.cell
+def _(collision_card, collision_curve_view, collision_slider, mo):
+    mo.accordion(
+        {
+            "🔍 Aside: why is a Morgan fingerprint 2048 bits long? (hash collisions)": mo.vstack(
+                [
+                    mo.md(
+                        "Morgan has *no* fixed vocabulary, so it can't reserve a slot "
+                        "per feature the way MACCS does — it **hashes** each atom "
+                        "environment into one of *N* bits. Make *N* too small and "
+                        "different substructures collide onto the same bit. Squeeze it "
+                        "down to just **8 bits** and watch distinct environments pile "
+                        "up on one slot:"
+                    ),
+                    collision_slider,
+                    collision_card,
+                    collision_curve_view,
+                ]
+            )
+        }
+    )
     return
 
 
