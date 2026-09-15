@@ -34,14 +34,6 @@ SEEDS = (0, 1, 2)
 EPOCHS = 30
 
 
-def _project_2d(emb: np.ndarray, seed: int = 0) -> np.ndarray:
-    """PCA to 2D (cheap, deterministic) for the learned-fingerprint scatter."""
-    x = emb - emb.mean(axis=0, keepdims=True)
-    # SVD-based PCA; take first 2 components.
-    _u, _s, vt = np.linalg.svd(x, full_matrices=False)
-    return (x @ vt[:2].T).astype(np.float32)
-
-
 def run_pair(pair_key: str) -> None:
     ed = load_endpoint_data(pair_key)
     logger.info(
@@ -55,15 +47,26 @@ def run_pair(pair_key: str) -> None:
     summary: list[dict] = []
     for alpha in ALPHAS:
         r2_a, r2_b = [], []
-        rep_proj = None
-        rep_labels = None
+        scatter = None
         for seed in SEEDS:
             res = train_dmpnn(ed, alpha=alpha, epochs=EPOCHS, seed=seed)
             r2_a.append(res.r2_a)
             r2_b.append(res.r2_b)
             if seed == 0:
-                rep_proj = _project_2d(res.embedding)
-                rep_labels = ed.y  # (n, 2) pKi labels for coloring
+                # Per-test-molecule predicted/actual/cliff for the scatter, for
+                # each endpoint. Round to keep the JSON compact.
+                scatter = {
+                    "a": {
+                        "actual": np.round(res.test_actual[:, 0], 2).tolist(),
+                        "pred": np.round(res.test_pred[:, 0], 2).tolist(),
+                        "cliff": res.test_cliff[:, 0].astype(int).tolist(),
+                    },
+                    "b": {
+                        "actual": np.round(res.test_actual[:, 1], 2).tolist(),
+                        "pred": np.round(res.test_pred[:, 1], 2).tolist(),
+                        "cliff": res.test_cliff[:, 1].astype(int).tolist(),
+                    },
+                }
             logger.info(
                 f"  alpha={alpha} seed={seed}: "
                 f"R2_a={res.r2_a:.3f} R2_b={res.r2_b:.3f}"
@@ -75,9 +78,7 @@ def run_pair(pair_key: str) -> None:
                 "r2_a_std": float(np.nanstd(r2_a)),
                 "r2_b_mean": float(np.nanmean(r2_b)),
                 "r2_b_std": float(np.nanstd(r2_b)),
-                # downsample the scatter to keep the JSON small
-                "proj": rep_proj[::4].tolist() if rep_proj is not None else [],
-                "labels": rep_labels[::4].tolist() if rep_labels is not None else [],
+                "scatter": scatter,
             }
         )
 

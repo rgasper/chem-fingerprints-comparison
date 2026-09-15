@@ -1194,7 +1194,77 @@ def _(alpha_knob, alt, ctx, mo, pd, target_pair_choice):
             .mark_rule(color="#868e96", strokeDash=[4, 4])
             .encode(x="alpha:Q")
         )
-        _view = mo.vstack([mo.md(_note) if _note else mo.md(""), _readout, mo.as_html(_line + _rule)])
+        _tradeoff = mo.as_html(_line + _rule)
+
+        # Predicted-vs-actual scatter per endpoint, cliff molecules in red.
+        # This is where the aggregate R2 hides the real story: the model can look
+        # decent overall yet miss the cliff molecules specifically.
+        def _scatter(endpoint_key, target):
+            sc = _cur.get("scatter")
+            if not sc or endpoint_key not in sc:
+                return mo.md(f"*No per-molecule data cached for {target}.*")
+            s = sc[endpoint_key]
+            _pts = pd.DataFrame(
+                {
+                    "actual": s["actual"],
+                    "pred": s["pred"],
+                    "kind": ["on a cliff" if c else "not a cliff" for c in s["cliff"]],
+                }
+            ).dropna()
+            if _pts.empty:
+                return mo.md(f"*{target}: no test molecules with a label.*")
+            _lo = float(min(_pts["actual"].min(), _pts["pred"].min())) - 0.3
+            _hi = float(max(_pts["actual"].max(), _pts["pred"].max())) + 0.3
+            _diag = (
+                alt.Chart(pd.DataFrame({"x": [_lo, _hi], "y": [_lo, _hi]}))
+                .mark_line(color="#adb5bd", strokeDash=[4, 4])
+                .encode(x="x:Q", y="y:Q")
+            )
+            _sc = (
+                alt.Chart(_pts)
+                .mark_circle(size=45, opacity=0.6)
+                .encode(
+                    x=alt.X("actual:Q", title="measured pKi", scale=alt.Scale(domain=[_lo, _hi])),
+                    y=alt.Y("pred:Q", title="predicted pKi", scale=alt.Scale(domain=[_lo, _hi])),
+                    color=alt.Color(
+                        "kind:N",
+                        title=None,
+                        scale=alt.Scale(
+                            domain=["on a cliff", "not a cliff"],
+                            range=["#e03131", "#adb5bd"],
+                        ),
+                    ),
+                    tooltip=["actual:Q", "pred:Q", "kind:N"],
+                )
+            )
+            return mo.vstack(
+                [
+                    mo.md(f"**{target}** — predicted vs. measured (test set)"),
+                    mo.as_html((_diag + _sc).properties(height=300, width=300)),
+                ]
+            )
+
+        _scatters = mo.hstack(
+            [_scatter("a", _ta), _scatter("b", _tb)], widths=[1, 1], gap=2
+        )
+        _caption = mo.md(
+            "Points on the dashed line are perfect predictions; the "
+            "<span style='color:#e03131'>**red cliff molecules**</span> are the "
+            "ones a similarity-based view can't see coming. Watch them scatter "
+            "*off* the line — especially on the endpoint α is starving — while the "
+            "overall R² still looks respectable. The aggregate score hides the "
+            "failure that matters most."
+        )
+        _view = mo.vstack(
+            [
+                mo.md(_note) if _note else mo.md(""),
+                _readout,
+                _scatters,
+                _caption,
+                mo.md("**How each endpoint's accuracy trades off as you move α:**"),
+                _tradeoff,
+            ]
+        )
     _view
     return
 

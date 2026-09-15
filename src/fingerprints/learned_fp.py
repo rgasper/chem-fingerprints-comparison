@@ -59,25 +59,34 @@ class EndpointData:
     target_b: str
     smiles: list[str]
     y: np.ndarray  # (n, 2), columns [target_a, target_b], NaN for missing
+    cliff: np.ndarray  # (n, 2) bool, True if the molecule is on a cliff for that target
 
 
-def _load_target(dataset: str) -> dict[str, float]:
+def _load_target(dataset: str) -> tuple[dict[str, float], dict[str, bool]]:
     df = pl.read_csv(CACHE_MOLACE / f"{dataset}.csv")
-    out: dict[str, float] = {}
-    for smi, y in zip(df["smiles"].to_list(), df["y [pEC50/pKi]"].to_list()):
-        mol = Chem.MolFromSmiles(smi)
+    ys: dict[str, float] = {}
+    cliffs: dict[str, bool] = {}
+    has_cliff = "cliff_mol" in df.columns
+    for row in df.iter_rows(named=True):
+        mol = Chem.MolFromSmiles(row["smiles"])
+        y = row["y [pEC50/pKi]"]
         if mol is not None and y is not None:
-            out[Chem.MolToSmiles(mol)] = float(y)
-    return out
+            key = Chem.MolToSmiles(mol)
+            ys[key] = float(y)
+            cliffs[key] = bool(row["cliff_mol"]) if has_cliff else False
+    return ys, cliffs
 
 
 def load_endpoint_data(pair_key: str) -> EndpointData:
     spec = ENDPOINT_PAIRS[pair_key]
-    da = _load_target(spec["dataset_a"])
-    db = _load_target(spec["dataset_b"])
+    da, ca = _load_target(spec["dataset_a"])
+    db, cb = _load_target(spec["dataset_b"])
     smiles = sorted(set(da) | set(db))
     y = np.array(
         [[da.get(s, np.nan), db.get(s, np.nan)] for s in smiles], dtype=float
+    )
+    cliff = np.array(
+        [[ca.get(s, False), cb.get(s, False)] for s in smiles], dtype=bool
     )
     return EndpointData(
         pair_key=pair_key,
@@ -85,6 +94,7 @@ def load_endpoint_data(pair_key: str) -> EndpointData:
         target_b=spec["target_b"],
         smiles=smiles,
         y=y,
+        cliff=cliff,
     )
 
 
@@ -127,6 +137,10 @@ class TrainResult:
     r2_b: float  # test R^2 on endpoint B
     embedding: np.ndarray  # (n, d) learned fingerprint for all molecules
     smiles: list[str]
+    # Per-TEST-molecule predicted/actual/cliff for the scatter, per endpoint.
+    test_actual: np.ndarray  # (n_test, 2)
+    test_pred: np.ndarray  # (n_test, 2)
+    test_cliff: np.ndarray  # (n_test, 2) bool
 
 
 def train_dmpnn(
@@ -204,4 +218,7 @@ def train_dmpnn(
         r2_b=_r2(1),
         embedding=emb,
         smiles=list(ed.smiles),
+        test_actual=ed.y[test_idx],
+        test_pred=preds[test_idx],
+        test_cliff=ed.cliff[test_idx],
     )
