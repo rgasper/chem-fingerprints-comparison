@@ -1032,6 +1032,135 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
+    ## 5 · A fingerprint the data learns — and the catch
+
+    Now we let the data define the representation *end to end*. A
+    [chemprop](https://github.com/chemprop/chemprop) **D-MPNN** (message-passing
+    graph neural network) reads the raw molecular graph and **learns its own
+    fingerprint**, driven only by the activity labels — no MACCS keys, no Morgan
+    radius, no features we chose. (Feeding a fixed fingerprint into a network
+    would just smuggle our imposed lens back in; the whole point is to let the
+    graph speak.)
+
+    We train it on **two related endpoints at once** — one shared learned
+    fingerprint feeding two prediction heads. One knob, **α**, sets how much the
+    training loss cares about endpoint A vs. endpoint B. Slide it and watch what
+    the data gives you.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    alpha_knob = mo.ui.slider(
+        start=0.0,
+        stop=1.0,
+        step=0.25,
+        value=0.5,
+        label="α — loss weight toward endpoint A (μ / D3)",
+        show_value=True,
+        full_width=True,
+    )
+    alpha_knob
+    return (alpha_knob,)
+
+
+@app.cell
+def _(alpha_knob, alt, mo, pd):
+    from fingerprints import learned_fp_view as lfv
+
+    # Use whichever endpoint pair has a trained grid (mu/kappa is trained first).
+    _pair = "mu_vs_kappa" if lfv.has_grid("mu_vs_kappa") else (
+        lfv.available_pairs()[0] if lfv.available_pairs() else None
+    )
+    if _pair is None:
+        _view = mo.md(
+            "*No trained α-grid found. Run "
+            "`uv run python scripts/train_alpha_grid.py` to generate it.*"
+        ).callout(kind="warn")
+    else:
+        _g = lfv.load_grid(_pair)
+        _ta, _tb = _g["target_a"], _g["target_b"]
+        _res = {r["alpha"]: r for r in _g["results"]}
+        _cur = _res.get(alpha_knob.value, _g["results"][len(_g["results"]) // 2])
+
+        # Two big R2 readouts for the current alpha.
+        def _card(target, r2, is_weighted):
+            _kind = "success" if r2 > 0.3 else ("danger" if r2 < 0.1 else "neutral")
+            _verdict = "learns it" if r2 > 0.3 else (
+                "fails" if r2 < 0.1 else "partial"
+            )
+            return mo.md(
+                f"#### {target}\n\ntest R² = **{r2:.2f}** — {_verdict}"
+            ).callout(kind=_kind)
+
+        _readout = mo.hstack(
+            [
+                _card(_ta, _cur["r2_a_mean"], True),
+                _card(_tb, _cur["r2_b_mean"], True),
+            ],
+            widths=[1, 1],
+            gap=2,
+        )
+
+        # Trade-off curve: R2 on each endpoint across the whole alpha grid,
+        # with the current alpha marked.
+        _rows = []
+        for r in _g["results"]:
+            _rows.append({"alpha": r["alpha"], "R2": r["r2_a_mean"], "endpoint": _ta})
+            _rows.append({"alpha": r["alpha"], "R2": r["r2_b_mean"], "endpoint": _tb})
+        _df = pd.DataFrame(_rows)
+        _line = (
+            alt.Chart(_df)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("alpha:Q", title="α (loss weight toward endpoint A)"),
+                y=alt.Y("R2:Q", title="test R²", scale=alt.Scale(domain=[-0.1, 0.6])),
+                color=alt.Color("endpoint:N", title=None),
+            )
+            .properties(height=240, width=440)
+        )
+        _rule = (
+            alt.Chart(pd.DataFrame({"alpha": [alpha_knob.value]}))
+            .mark_rule(color="#868e96", strokeDash=[4, 4])
+            .encode(x="alpha:Q")
+        )
+        _view = mo.vstack([_readout, mo.as_html(_line + _rule)])
+    _view
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    **The catch — and the payoff of the whole notebook.** Push α all the way to
+    one endpoint and the model learns a fingerprint that's excellent there and
+    *useless* on the other (R² near zero). There's a broad middle where one
+    shared representation serves both endpoints decently — but you can't have it
+    all: the fingerprint the data gives you **depends on which question you ask
+    it**.
+
+    That's the arc closing. Fixed fingerprints (MACCS, Morgan) impose one lens
+    and are stuck with its blind spots — the activity cliff. Learned
+    representations remove the imposed lens, but they don't escape the deeper
+    truth: *there is no single, universal "similar"*. Structure only means
+    something **relative to a question** — a target, an endpoint, an assay. Both
+    halves of this notebook — the interaction fingerprint read off a pose, and
+    the D-MPNN trained on labels — are the same move: stop dictating how the
+    molecule should be a vector, and let the phenomenon tell you.
+
+    *Rigor note: the numbers above are a deliberately simplified, in-notebook
+    demo (one scaffold split, 3 seeds, a small D-MPNN). A fuller offline
+    benchmark — 5×5-fold CV comparing the learned fingerprint against models on
+    fixed fingerprints, with proper significance testing — tells the same story
+    more carefully; see the repo.*
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
     ---
 
     ### About this notebook
