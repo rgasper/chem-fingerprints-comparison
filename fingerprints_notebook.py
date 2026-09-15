@@ -892,6 +892,88 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
 
 
 @app.cell
+def _(cliff_choice, ctx, mo, target_pair_choice):
+    from fingerprints import pose_view as pv2
+
+    # The interaction fingerprint: encode each pose by the contacts it makes
+    # (residue x interaction-type bits) and lay the four poses side by side.
+    # Unlike the 2D fingerprints earlier in the notebook, these bits are read
+    # off the binding event itself — the data telling us what to encode.
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _idx = cliff_choice.value
+    if not pv2.has_poses(_tp.key, _idx):
+        _view = mo.md("")
+    else:
+        _poses = pv2.load_all(_tp.key, _idx)
+        _keys = [
+            f"mol1_{_tp.target_a}", f"mol2_{_tp.target_a}",
+            f"mol1_{_tp.target_b}", f"mol2_{_tp.target_b}",
+        ]
+        _col_labels = [
+            f"mol 1 · {_tp.target_a}", f"mol 2 · {_tp.target_a}",
+            f"mol 1 · {_tp.target_b}", f"mol 2 · {_tp.target_b}",
+        ]
+        _bits, _fps = pv2.aligned_interaction_fingerprints(_poses, _keys)
+        _type_label = dict(pv2.INTERACTION_TYPES)
+        _type_color = {
+            "saltbridge": "#e0a800", "hbond": "#4dabf7", "pistack": "#20c997",
+            "pication": "#e64980", "hydrophobic": "#adb5bd",
+        }
+
+        # Hand-built HTML grid: rows = interaction bits, cols = the 4 poses.
+        _html = [
+            "<table style='border-collapse:collapse;font-size:12px'>",
+            "<tr><th style='text-align:left;padding:2px 8px'>interaction bit</th>"
+            + "".join(
+                f"<th style='padding:2px 6px;writing-mode:vertical-rl;"
+                f"transform:rotate(180deg)'>{c}</th>"
+                for c in _col_labels
+            )
+            + "</tr>",
+        ]
+        for _res, _typ in _bits:
+            _dot = _type_color.get(_typ, "#868e96")
+            _label = (
+                f"<span style='color:{_dot}'>●</span> {_res} "
+                f"<span style='color:#868e96'>({_type_label.get(_typ, _typ)})</span>"
+            )
+            _cells = ""
+            for _k in _keys:
+                _on = _fps[_k].get((_res, _typ), 0)
+                _bg = _dot if _on else "#f1f3f5"
+                _cells += (
+                    f"<td style='padding:0;border:1px solid #fff;width:70px;"
+                    f"height:20px;background:{_bg}'></td>"
+                )
+            _html.append(
+                f"<tr><td style='padding:2px 8px'>{_label}</td>{_cells}</tr>"
+            )
+        _html.append("</table>")
+
+        _view = mo.vstack(
+            [
+                mo.md(
+                    "**An interaction fingerprint, read off the pose.** Each row is "
+                    "a contact the ligand makes; a filled cell means that pose has "
+                    "it. Same idea as the 2D fingerprints from earlier — but here "
+                    "the *data* (the binding pose) decides the bits, instead of us "
+                    "imposing them."
+                ),
+                mo.Html("".join(_html)),
+                mo.md(
+                    "*Contacts via PLIP on the predicted poses. The salt bridge to "
+                    "the conserved aspartate is the constant anchor; the cliff shows "
+                    "up only as a subtle reshuffle of weaker H-bond / hydrophobic "
+                    "bits — even this data-derived fingerprint doesn't obviously "
+                    "explain the potency gap.*"
+                ),
+            ]
+        )
+    _view
+    return
+
+
+@app.cell
 def _(mo):
     mo.md(r"""
     **The honest result:** across these cliffs, Boltz places the two molecules
@@ -916,11 +998,33 @@ def _(mo):
 
     *(Predicted poses are hypotheses, not experimental structures. We use them
     to reason about plausibility, not to assert a mechanism.)*
+    """)
+    return
 
-    So what **can** learn the difference? The next sections bring in **neural
-    fingerprints** — first a pretrained foundation model, then a small network we
-    train on these very endpoints — to ask whether a representation *learned from
-    activity data* can do what fixed structure alone can't.
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## The turn: let the data define the fingerprint
+
+    Step back and notice the pattern. Sections 1–3 built fingerprints by
+    **imposing a lens**: MACCS's expert checklist, Morgan's circular
+    environments, path and torsion hashes. *We* decided what a molecule's
+    features are — and then Section 4 showed the cost: that fixed lens is blind
+    to activity cliffs, because "similar structure" was *our* rule, not the
+    biology's.
+
+    The interaction fingerprint above is the first hint of the opposite move.
+    Its bits weren't designed by us — they're **read off the binding event**:
+    the pose tells us which contacts matter. The fingerprint came *from the
+    data*.
+
+    The next sections push that idea all the way. Instead of hand-designing
+    features, we let a model **learn** the representation — first a pretrained
+    foundation model (**CheMeleon**), then a small network we train ourselves on
+    these very endpoints. The question throughout: can a fingerprint *learned
+    from activity data* do what a fixed structural one can't — and what does it
+    cost us when we try?
     """)
     return
 

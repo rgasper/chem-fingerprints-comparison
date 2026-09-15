@@ -89,6 +89,66 @@ def load_interactions(pose: Pose) -> list[dict]:
         return []
 
 
+# Interaction types in a stable display order + labels for charts/legends.
+INTERACTION_TYPES: tuple[tuple[str, str], ...] = (
+    ("saltbridge", "salt bridge"),
+    ("hbond", "H-bond"),
+    ("pistack", "π-stack"),
+    ("pication", "π-cation"),
+    ("hydrophobic", "hydrophobic"),
+)
+
+
+def interaction_counts(pose: Pose) -> dict[str, int]:
+    """Count of each interaction type for a pose (0 for types not present)."""
+    counts = {t: 0 for t, _ in INTERACTION_TYPES}
+    for rec in load_interactions(pose):
+        if rec["type"] in counts:
+            counts[rec["type"]] += 1
+    return counts
+
+
+def interaction_fingerprint(pose: Pose) -> dict[tuple[str, str], int]:
+    """Encode a pose as an *interaction fingerprint*: (residue, type) -> count.
+
+    This is the same idea as a structural fingerprint, but the bits are read off
+    the binding event itself — each 'on' bit is a specific contact the pose
+    makes (e.g. an H-bond to ASP149). The data defines the features, rather than
+    us imposing them.
+    """
+    fp: dict[tuple[str, str], int] = {}
+    for rec in load_interactions(pose):
+        key = (rec["residue"], rec["type"])
+        fp[key] = fp.get(key, 0) + 1
+    return fp
+
+
+def aligned_interaction_fingerprints(
+    poses: dict[str, Pose], keys: list[str]
+) -> tuple[list[tuple[str, str]], dict[str, dict[tuple[str, str], int]]]:
+    """Interaction fingerprints for several poses over a shared, sorted key set.
+
+    Returns (all_keys, {pose_key: fingerprint}) where all_keys is the union of
+    (residue, interaction-type) bits across the given poses — so the poses'
+    fingerprints line up column-for-column for a comparison grid. Keys are
+    sorted by interaction type (in display order) then residue number.
+    """
+    type_order = {t: i for i, (t, _) in enumerate(INTERACTION_TYPES)}
+    fps = {k: interaction_fingerprint(poses[k]) for k in keys}
+    all_keys: set[tuple[str, str]] = set()
+    for fp in fps.values():
+        all_keys |= set(fp)
+
+    def _resnum(residue: str) -> int:
+        digits = "".join(ch for ch in residue if ch.isdigit())
+        return int(digits) if digits else 0
+
+    ordered = sorted(
+        all_keys, key=lambda k: (type_order.get(k[1], 99), _resnum(k[0]), k[0])
+    )
+    return ordered, fps
+
+
 def _atom_site(cif_text: str) -> tuple[dict[str, int], list[list[str]]]:
     lines = cif_text.splitlines()
     i = 0
