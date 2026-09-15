@@ -1100,10 +1100,10 @@ def _(mo):
     would just smuggle our imposed lens back in; the whole point is to let the
     graph speak.)
 
-    We train it on **two related endpoints at once** — one shared learned
-    fingerprint feeding two prediction heads. One knob, **α**, sets how much the
-    training loss cares about endpoint A vs. endpoint B. Slide it and watch what
-    the data gives you.
+    We train it on the **two related endpoints from the pair you picked above**,
+    at once — one shared learned fingerprint feeding two prediction heads. One
+    knob, **α**, sets how much the training loss cares about the first endpoint
+    vs. the second. Slide it and watch what the data gives you.
     """)
     return
 
@@ -1115,7 +1115,7 @@ def _(mo):
         stop=1.0,
         step=0.25,
         value=0.5,
-        label="α — loss weight toward endpoint A (μ / D3)",
+        label="α — loss weight toward the first endpoint (← second · first →)",
         show_value=True,
         full_width=True,
     )
@@ -1124,13 +1124,18 @@ def _(mo):
 
 
 @app.cell
-def _(alpha_knob, alt, mo, pd):
+def _(alpha_knob, alt, ctx, mo, pd, target_pair_choice):
     from fingerprints import learned_fp_view as lfv
 
-    # Use whichever endpoint pair has a trained grid (mu/kappa is trained first).
-    _pair = "mu_vs_kappa" if lfv.has_grid("mu_vs_kappa") else (
-        lfv.available_pairs()[0] if lfv.available_pairs() else None
-    )
+    # Follow the target-pair picker from Section 4; fall back to any trained grid
+    # if the selected pair hasn't been trained yet.
+    _sel = ctx.by_key()[target_pair_choice.value].key
+    if lfv.has_grid(_sel):
+        _pair = _sel
+    elif lfv.available_pairs():
+        _pair = lfv.available_pairs()[0]
+    else:
+        _pair = None
     if _pair is None:
         _view = mo.md(
             "*No trained α-grid found. Run "
@@ -1141,9 +1146,15 @@ def _(alpha_knob, alt, mo, pd):
         _ta, _tb = _g["target_a"], _g["target_b"]
         _res = {r["alpha"]: r for r in _g["results"]}
         _cur = _res.get(alpha_knob.value, _g["results"][len(_g["results"]) // 2])
+        _note = (
+            ""
+            if _pair == _sel
+            else f"  \n*(showing {_ta} vs {_tb} — the picked pair isn't trained yet)*"
+        )
 
-        # Two big R2 readouts for the current alpha.
-        def _card(target, r2, is_weighted):
+        # Two big R2 readouts for the current alpha. alpha weights the FIRST
+        # endpoint (task A); 1-alpha the second.
+        def _card(target, r2):
             _kind = "success" if r2 > 0.3 else ("danger" if r2 < 0.1 else "neutral")
             _verdict = "learns it" if r2 > 0.3 else (
                 "fails" if r2 < 0.1 else "partial"
@@ -1154,8 +1165,8 @@ def _(alpha_knob, alt, mo, pd):
 
         _readout = mo.hstack(
             [
-                _card(_ta, _cur["r2_a_mean"], True),
-                _card(_tb, _cur["r2_b_mean"], True),
+                _card(f"{_ta}  (α = {alpha_knob.value})", _cur["r2_a_mean"]),
+                _card(f"{_tb}  (1−α = {round(1 - alpha_knob.value, 2)})", _cur["r2_b_mean"]),
             ],
             widths=[1, 1],
             gap=2,
@@ -1172,7 +1183,7 @@ def _(alpha_knob, alt, mo, pd):
             alt.Chart(_df)
             .mark_line(point=True)
             .encode(
-                x=alt.X("alpha:Q", title="α (loss weight toward endpoint A)"),
+                x=alt.X("alpha:Q", title="α (loss weight toward the first endpoint)"),
                 y=alt.Y("R2:Q", title="test R²", scale=alt.Scale(domain=[-0.1, 0.6])),
                 color=alt.Color("endpoint:N", title=None),
             )
@@ -1183,7 +1194,7 @@ def _(alpha_knob, alt, mo, pd):
             .mark_rule(color="#868e96", strokeDash=[4, 4])
             .encode(x="alpha:Q")
         )
-        _view = mo.vstack([_readout, mo.as_html(_line + _rule)])
+        _view = mo.vstack([mo.md(_note) if _note else mo.md(""), _readout, mo.as_html(_line + _rule)])
     _view
     return
 
