@@ -23,5 +23,8 @@ layouts/
 _scratch_*.py
 scratch.log
 
+# Boltz API working dir (scratch); extracted poses are kept in data/boltz_poses/
+boltz-experiments/
+
 # macOS
 .DS_Store

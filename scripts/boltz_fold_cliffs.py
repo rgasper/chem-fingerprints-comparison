@@ -47,10 +47,14 @@ def receptor_sequence(target_label: str) -> str:
     return "".join(r.text.splitlines()[1:])
 
 
-def fold_one(client, seq: str, ligand_smiles: str):
-    """Submit one protein+ligand co-fold and block until it finishes."""
-    # .run() submits, polls, and returns the completed prediction.
-    result = client.predictions.structure_and_binding.run(
+def fold_one(client, seq: str, ligand_smiles: str, name: str, root_dir: Path) -> Path:
+    """Submit one protein+ligand co-fold, wait, and return the output dir Path.
+
+    ``.run()`` handles submit -> poll -> download -> extract and returns the
+    directory containing ``outputs/files/prediction/*_predicted.cif`` and
+    ``metrics.json``.
+    """
+    return client.predictions.structure_and_binding.run(
         input={
             "entities": [
                 {"type": "protein", "chain_ids": ["A"], "value": seq},
@@ -63,15 +67,26 @@ def fold_one(client, seq: str, ligand_smiles: str):
             "num_samples": 1,
         },
         model="boltz-2.1",
+        root_dir=str(root_dir),
+        name=name,
     )
-    return result
 
 
-def _download(url: str, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    r = requests.get(url, timeout=120)
-    r.raise_for_status()
-    dest.write_bytes(r.content)
+def _extract_from_output(out_dir: Path, cif_dest: Path) -> dict:
+    """Copy the predicted complex CIF out of a .run() output dir and read metrics.
+
+    ``.run()`` extracts to ``<out_dir>/outputs/files/prediction/`` containing
+    ``*_predicted.cif`` and ``metrics.json``.
+    """
+    pred_dir = out_dir / "outputs" / "files" / "prediction"
+    cifs = sorted(pred_dir.glob("*_predicted.cif"))
+    if not cifs:
+        raise FileNotFoundError(f"no *_predicted.cif under {pred_dir}")
+    cif_dest.parent.mkdir(parents=True, exist_ok=True)
+    cif_dest.write_bytes(cifs[0].read_bytes())
+    metrics_path = pred_dir / "metrics.json"
+    metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else {}
+    return metrics
 
 
 def main() -> None:
@@ -93,6 +108,7 @@ def main() -> None:
     tp = by_key()[args.pair]
     cliff = tp.cliffs[args.index]
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    work_root = Path("boltz-experiments")
 
     seqs = {
         tp.target_a: receptor_sequence(tp.target_a),
@@ -114,13 +130,10 @@ def main() -> None:
                 continue
 
             logger.info(f"folding {tag} ({len(seq)} aa + {smiles})")
-            result = fold_one(client, seq, smiles)
-            if result.status != "succeeded" or result.output is None:
-                logger.error(f"{tag}: status={result.status} error={result.error}")
-                continue
-            best = result.output.best_sample
-            _download(best.structure.url, cif_path)
-            bm = result.output.binding_metrics
+            out_dir = fold_one(client, seq, smiles, name=tag, root_dir=work_root)
+            metrics = _extract_from_output(Path(out_dir), cif_path)
+            binding = metrics.get("binding_metrics", {}) or {}
+            best = (metrics.get("best_sample", {}) or {}).get("metrics", {}) or {}
             entry = {
                 "tag": tag,
                 "pair": args.pair,
@@ -129,14 +142,17 @@ def main() -> None:
                 "smiles": smiles,
                 "target": target,
                 "cif_file": cif_path.name,
-                "binding_confidence": getattr(bm, "binding_confidence", None),
+                "binding_confidence": binding.get("binding_confidence"),
+                "structure_confidence": best.get("structure_confidence"),
+                "ligand_iptm": best.get("ligand_iptm"),
             }
             # Cache per-fold metadata too, so a partial re-run can resume.
             meta_path.write_text(json.dumps(entry, indent=2))
             manifest.append(entry)
             logger.info(
                 f"  saved {cif_path.name} "
-                f"(binding_confidence={getattr(bm, 'binding_confidence', None)})"
+                f"(binding_confidence={entry['binding_confidence']}, "
+                f"ligand_iptm={entry['ligand_iptm']})"
             )
 
     (OUT_DIR / f"{args.pair}_{args.index}_manifest.json").write_text(
