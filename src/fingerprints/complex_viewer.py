@@ -1,0 +1,92 @@
+"""A minimal 3Dmol.js molecule-viewer anywidget for marimo.
+
+Renders a protein-ligand complex (from PDB/CIF text) in an interactive WebGL
+canvas: rotate/zoom the receptor, see the ligand in the pocket, optionally
+highlight a set of ligand atoms (e.g. the atoms that change across an activity
+cliff). 3Dmol.js is loaded from a CDN inside the widget, so nothing heavy runs
+in the Python kernel.
+
+State is a handful of traitlets synced to the browser; the JS side (re)builds
+the scene whenever they change. This is a custom widget precisely because no
+off-the-shelf marimo element can show a 3D structure.
+"""
+
+from __future__ import annotations
+
+import anywidget
+import traitlets
+
+
+_ESM = """
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (window.$3Dmol) { resolve(); return; }
+    if (document.querySelector(`script[src="${src}"]`)) {
+      const check = () => window.$3Dmol ? resolve() : setTimeout(check, 50);
+      check();
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = src; s.onload = () => resolve(); s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function render({ model, el }) {
+  el.innerHTML = "";
+  const container = document.createElement("div");
+  container.style.width = "100%";
+  container.style.height = (model.get("height") || 420) + "px";
+  container.style.position = "relative";
+  el.appendChild(container);
+
+  await loadScript("https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.0/3Dmol-min.js");
+
+  const viewer = window.$3Dmol.createViewer(container, { backgroundColor: "white" });
+
+  function build() {
+    viewer.clear();
+    const data = model.get("structure");
+    const fmt = model.get("format") || "pdb";
+    if (!data) { viewer.render(); return; }
+    viewer.addModel(data, fmt);
+
+    // Protein: cartoon, faint.
+    viewer.setStyle({}, { cartoon: { color: "spectrum", opacity: 0.55 } });
+
+    // Ligand (HETATM, excluding water): sticks.
+    const ligSel = { hetflag: true, not: { resn: ["HOH", "WAT"] } };
+    viewer.setStyle(ligSel, { stick: { colorscheme: "greenCarbon", radius: 0.18 } });
+
+    // Highlighted ligand atoms (by serial), if any: fat orange spheres.
+    const hi = model.get("highlight_serials") || [];
+    if (hi.length) {
+      viewer.setStyle(
+        { serial: hi },
+        { stick: { colorscheme: "orangeCarbon", radius: 0.28 },
+          sphere: { color: "orange", radius: 0.45 } }
+      );
+    }
+
+    viewer.zoomTo(ligSel);
+    viewer.zoom(0.7);
+    viewer.render();
+  }
+
+  build();
+  model.on("change:structure", build);
+  model.on("change:highlight_serials", build);
+}
+
+export default { render };
+"""
+
+
+class ComplexViewer(anywidget.AnyWidget):
+    """Interactive 3D viewer for a protein-ligand complex."""
+
+    _esm = _ESM
+    structure = traitlets.Unicode("").tag(sync=True)  # PDB/CIF text
+    format = traitlets.Unicode("pdb").tag(sync=True)
+    highlight_serials = traitlets.List(traitlets.Int()).tag(sync=True)
+    height = traitlets.Int(420).tag(sync=True)

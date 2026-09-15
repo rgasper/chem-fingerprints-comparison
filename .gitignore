@@ -19,5 +19,9 @@ marimo.log
 # marimo auto-generated view layouts (grid/slides) - notebook uses default layout
 layouts/
 
+# scratch / prototype notebooks
+_scratch_*.py
+scratch.log
+
 # macOS
 .DS_Store
