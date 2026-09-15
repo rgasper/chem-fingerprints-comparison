@@ -32,6 +32,17 @@ def _(mo):
     **Pick a molecule once, below. Everything in this notebook reacts to it.**
     That's marimo's reactive dataflow: change the molecule and every visualization
     downstream recomputes, so you can build intuition by exploration.
+
+    ---
+
+    The notebook has two parts, tracing one argument:
+
+    - **Part I — Deterministic fingerprints.** MACCS, Morgan/ECFP, and the RDKit
+      toolbox: features *we* design and impose. We see how they work, then watch
+      them break on **activity cliffs** — and ask whether 3D poses rescue them.
+    - **Part II — Data-learned fingerprints.** Bits read off a binding event, then
+      a graph neural network that **learns its own fingerprint** from activity
+      alone — with an honest look at what that buys and what it costs.
     """)
     return
 
@@ -125,7 +136,16 @@ def _(current_mol, mo, mol_valid, mx):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## 1 · What *is* a fingerprint? Start with MACCS
+    ## Part I · Deterministic fingerprints — features *we* impose
+
+    A fingerprint turns a molecule into a vector so a computer can compare
+    structures. The classic ones are **deterministic**: a fixed recipe *we*
+    designed decides what to look at — a checklist of substructures, circular
+    atom environments, hashed paths. Same molecule in, same bits out, every
+    time. Powerful and interpretable — but as we'll see, stuck with whatever
+    blind spots our chosen recipe has.
+
+    ### What *is* a fingerprint? Start with MACCS
 
     MACCS keys are the friendliest fingerprint to learn from: a fixed list of
     **166 predefined structural questions** ("is there a carbonyl?", "an aromatic
@@ -272,7 +292,7 @@ def _(bit_slider, current_mol, mo, mol_valid, mx, scrub_bits):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## 2 · The most-used fingerprint: Morgan (ECFP)
+    ### The most-used fingerprint: Morgan (ECFP)
 
     If you use one fingerprint in cheminformatics, it's this one. **Morgan**
     (a.k.a. ECFP) takes a different tack from MACCS's fixed checklist: it has
@@ -525,7 +545,7 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## 3 · The rest of the RDKit toolbox
+    ### The rest of the RDKit toolbox
 
     Beyond MACCS (a substructure-key fingerprint) and Morgan (a circular
     atom-environment fingerprint), RDKit ships several more classical
@@ -630,7 +650,7 @@ def _(mo):
     mo.md(r"""
     ---
 
-    ## 4 · Where fingerprints break: activity cliffs
+    ### Where fingerprints break: activity cliffs
 
     Everything so far rests on one assumption: **similar structure → similar
     behavior**. That's why fingerprints work for search and cheap property
@@ -795,7 +815,7 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## 4b · Does 3D structure explain the cliff?
+    ### Does 3D structure explain the cliff?
 
     Fingerprints only see the 2D graph, so of course they miss the cliff. But
     surely the **3D structure** — the ligand actually sitting in each pocket —
@@ -1063,13 +1083,13 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## The turn: let the data define the fingerprint
+    ## Part II · Data-learned fingerprints — features the *data* defines
 
-    Step back and notice the pattern. Sections 1–3 built fingerprints by
+    Step back and notice the pattern. Part I built fingerprints by
     **imposing a lens**: MACCS's expert checklist, Morgan's circular
     environments, path and torsion hashes. *We* decided what a molecule's
-    features are — and then Section 4 showed the cost: that fixed lens is blind
-    to activity cliffs, because "similar structure" was *our* rule, not the
+    features are — and then the activity cliffs showed the cost: that fixed lens
+    is blind to them, because "similar structure" was *our* rule, not the
     biology's.
 
     The interaction fingerprint above is the first hint of the opposite move.
@@ -1077,12 +1097,12 @@ def _(mo):
     the pose tells us which contacts matter. The fingerprint came *from the
     data*.
 
-    The next sections push that idea all the way. Instead of hand-designing
-    features, we let a model **learn** the representation — first a pretrained
-    foundation model (**CheMeleon**), then a small network we train ourselves on
-    these very endpoints. The question throughout: can a fingerprint *learned
-    from activity data* do what a fixed structural one can't — and what does it
-    cost us when we try?
+    The next section pushes that idea all the way. Instead of hand-designing
+    features, we let a model **learn** the representation — a small network we
+    train ourselves on these very endpoints, reading nothing but the raw
+    molecular graph. The question throughout: can a fingerprint *learned from
+    activity data* do what a fixed structural one can't — and what does it cost
+    us when we try?
     """)
     return
 
@@ -1090,7 +1110,7 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## 5 · A fingerprint the data learns — and the catch
+    ### A fingerprint the data learns — and the catch
 
     Now we let the data define the representation *end to end*. A
     [chemprop](https://github.com/chemprop/chemprop) **D-MPNN** (message-passing
@@ -1304,11 +1324,29 @@ def _(mo):
 
     ### About this notebook
 
-    Built as a pairing session with an AI coding assistant (disclosed per
-    competition guidelines). All chemistry runs through **RDKit**; fingerprint
-    code and analyses are reused from this repo's own investigation
-    (see `README.md`). SMILES are validated on input and invalid structures are
-    handled gracefully.
+    **AI use (disclosed per competition guidelines).** This notebook was built in
+    a pairing session with an AI coding assistant: it helped scaffold the marimo
+    cells, the custom `ComplexViewer` anywidget, and the analysis scripts, and
+    drafted the prose. Every chemical claim, data source, and result was
+    reviewed by a human; the AI wrote no chemistry it wasn't checked on.
+
+    **Chemistry & validity.** All structure handling runs through **RDKit**.
+    SMILES are validated on input and invalid structures are handled gracefully
+    — no cell throws on bad input. Activity data are from **MoleculeACE**
+    (curated ChEMBL bioactivities with published activity-cliff labels); the
+    learned model uses **scaffold splits** to avoid train/test leakage. 3D
+    complexes are **Boltz-2** predictions — framed throughout as *hypotheses*,
+    not experimental structures — and protein–ligand interactions are detected
+    with **PLIP**. Predicted poses are never presented as ground truth.
+
+    **Reproducibility.** Heavy compute (folding, interaction detection, model
+    training) runs offline and is cached in `data/`; the notebook only reads
+    those caches, so it stays instant and deterministic. Fingerprint code and
+    analyses live in this repo — see `README.md`.
+
+    **Credits.** RDKit · chemprop (D-MPNN) · Boltz-2 · PLIP · MoleculeACE ·
+    3Dmol.js · Altair · marimo. Thanks to OpenADMET and the marimo team for the
+    competition.
     """)
     return
 
