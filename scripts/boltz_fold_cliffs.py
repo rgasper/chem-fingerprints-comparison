@@ -26,7 +26,7 @@ from pathlib import Path
 import requests
 from loguru import logger
 
-from fingerprints.data.context_cliffs import by_key
+from fingerprints.data.context_cliffs import TARGET_PAIRS, by_key
 
 
 # UniProt accessions for the receptors used in the curated target pairs.
@@ -89,24 +89,10 @@ def _extract_from_output(out_dir: Path, cif_dest: Path) -> dict:
     return metrics
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--pair", default="mu_vs_kappa", help="target-pair key")
-    ap.add_argument("--index", type=int, default=2, help="cliff index within the pair")
-    ap.add_argument(
-        "--force", action="store_true", help="refold even if cached (re-spends credits)"
-    )
-    args = ap.parse_args()
-
-    try:
-        from boltz_api import Boltz
-    except ImportError as e:
-        raise SystemExit("pip/uv add boltz-api first") from e
-
-    client = Boltz(base_url="https://api.boltz.bio")  # reads BOLTZ_API_KEY
-
-    tp = by_key()[args.pair]
-    cliff = tp.cliffs[args.index]
+def fold_cliff(client, pair: str, index: int, force: bool) -> None:
+    """Fold one cliff pair (2 ligands x 2 receptors) and write its manifest."""
+    tp = by_key()[pair]
+    cliff = tp.cliffs[index]
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     work_root = Path("boltz-experiments")
 
@@ -118,13 +104,13 @@ def main() -> None:
     manifest: list[dict] = []
     for mol_id, smiles in [("mol1", cliff.smiles_1), ("mol2", cliff.smiles_2)]:
         for target, seq in seqs.items():
-            tag = f"{args.pair}_{args.index}_{mol_id}_{target.replace(' ', '')}"
+            tag = f"{pair}_{index}_{mol_id}_{target.replace(' ', '')}"
             cif_path = OUT_DIR / f"{tag}.cif"
             meta_path = OUT_DIR / f"{tag}.json"
 
             # Idempotent: if this fold is already cached, reuse it and don't
-            # spend Boltz credits again. Delete the .cif to force a refold.
-            if cif_path.exists() and meta_path.exists() and not args.force:
+            # spend Boltz credits again. Use --force to refold.
+            if cif_path.exists() and meta_path.exists() and not force:
                 logger.info(f"{tag}: already cached, skipping")
                 manifest.append(json.loads(meta_path.read_text()))
                 continue
@@ -136,8 +122,8 @@ def main() -> None:
             best = (metrics.get("best_sample", {}) or {}).get("metrics", {}) or {}
             entry = {
                 "tag": tag,
-                "pair": args.pair,
-                "index": args.index,
+                "pair": pair,
+                "index": index,
                 "mol_id": mol_id,
                 "smiles": smiles,
                 "target": target,
@@ -155,10 +141,43 @@ def main() -> None:
                 f"ligand_iptm={entry['ligand_iptm']})"
             )
 
-    (OUT_DIR / f"{args.pair}_{args.index}_manifest.json").write_text(
-        json.dumps(manifest, indent=2)
+    (OUT_DIR / f"{pair}_{index}_manifest.json").write_text(json.dumps(manifest, indent=2))
+    logger.info(f"wrote manifest with {len(manifest)} poses for {pair}[{index}]")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--pair", default="mu_vs_kappa", help="target-pair key")
+    ap.add_argument("--index", type=int, default=2, help="cliff index within the pair")
+    ap.add_argument(
+        "--all",
+        action="store_true",
+        help="fold every cliff of every target pair (ignores --pair/--index)",
     )
-    logger.info(f"wrote manifest with {len(manifest)} poses to {OUT_DIR}")
+    ap.add_argument(
+        "--force", action="store_true", help="refold even if cached (re-spends credits)"
+    )
+    args = ap.parse_args()
+
+    try:
+        from boltz_api import Boltz
+    except ImportError as e:
+        raise SystemExit("pip/uv add boltz-api first") from e
+
+    client = Boltz(base_url="https://api.boltz.bio")  # reads BOLTZ_API_KEY
+
+    if args.all:
+        jobs = [
+            (tp.key, i)
+            for tp in TARGET_PAIRS
+            for i in range(len(tp.cliffs))
+        ]
+        logger.info(f"folding ALL {len(jobs)} cliffs ({len(jobs) * 4} complexes)")
+    else:
+        jobs = [(args.pair, args.index)]
+
+    for pair, index in jobs:
+        fold_cliff(client, pair, index, args.force)
 
 
 if __name__ == "__main__":

@@ -786,10 +786,118 @@ def _(mo):
     but yield **zero** context-dependent cliffs in this benchmark. Cliffs only
     appear where the biology actually diverges.)
 
-    So what can learn the difference? The next sections bring in **neural
+    So what can learn the difference? Before we get there, let's look at the
+    cliff in **3D** — does the physical picture explain it?
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ## 4b · Does 3D structure explain the cliff?
+
+    Fingerprints only see the 2D graph, so of course they miss the cliff. But
+    surely the **3D structure** — the ligand actually sitting in each pocket —
+    would reveal *why* the same change matters on one receptor and not the other?
+
+    We co-folded **both** ligands of the mu/kappa "ring CH₂→NH" cliff into
+    **both** receptors with [Boltz-2](https://github.com/jwohlwend/boltz) (a
+    state-of-the-art structure predictor), giving four predicted complexes.
+    Rotate them below. Each ligand's basic amine anchors to the conserved
+    <span style="color:#c026a3">**aspartate (D3.32, magenta)**</span> that every
+    aminergic-GPCR ligand grabs — confirming the poses land in the real
+    orthosteric pocket.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    from fingerprints import pose_view as pv
+    from fingerprints.complex_viewer import ComplexViewer
+
+    _poses = pv.load_all("mu_vs_kappa", 2)
+
+    # The anchoring Asp residue number differs per receptor; pull it from the
+    # pocket analysis so the label is correct for each pose.
+    def _anchor_resi(pose):
+        for rn, seq, _d in pv.pocket_residues(pose.cif_text):
+            if rn == "ASP":
+                return seq
+        return ""
+
+    def _panel(key, counterpart_key, title):
+        p = _poses[key]
+        changed = pv.changed_atom_serials(p, _poses[counterpart_key])
+        v = ComplexViewer(
+            structure=p.cif_text,
+            format="cif",
+            highlight_resi=_anchor_resi(p),
+            highlight_serials=changed,
+            height=340,
+        )
+        cap = mo.md(
+            f"**{title}**  \nBoltz binding confidence "
+            f"**{p.binding_confidence:.2f}**, ligand ipTM **{p.ligand_iptm:.2f}**"
+        )
+        return mo.vstack([cap, mo.ui.anywidget(v)])
+
+    mo.vstack(
+        [
+            mo.md(
+                "#### The potent-on-μ molecule (ring CH₂)\n\nThe "
+                "<span style='color:#e8820c'>**orange atom**</span> is the one that "
+                "changes across the cliff; "
+                "<span style='color:#c026a3'>**magenta**</span> is the anchoring "
+                "aspartate."
+            ),
+            mo.hstack(
+                [
+                    _panel("mol1_mu-opioid", "mol2_mu-opioid", "in μ-opioid — pKi 10.2 (potent)"),
+                    _panel("mol1_kappa-opioid", "mol2_kappa-opioid", "in κ-opioid — pKi 10.5 (potent)"),
+                ],
+                widths=[1, 1],
+                gap=1,
+            ),
+            mo.md("#### The weak-on-μ molecule (ring NH — the only change)"),
+            mo.hstack(
+                [
+                    _panel("mol2_mu-opioid", "mol1_mu-opioid", "in μ-opioid — pKi 7.3 (810× weaker!)"),
+                    _panel("mol2_kappa-opioid", "mol1_kappa-opioid", "in κ-opioid — pKi 9.7 (still potent)"),
+                ],
+                widths=[1, 1],
+                gap=1,
+            ),
+        ]
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    **The honest result:** Boltz poses all four complexes *almost identically*,
+    with uniformly high confidence (0.93–0.99). The new NH lands ~3.8 Å from the
+    anchoring aspartate in **both** the μ pocket (where it costs 810× potency)
+    and the κ pocket (where it costs nothing). Even a state-of-the-art structure
+    predictor sees no obvious reason for the cliff.
+
+    That's not a failure of the demo — it *is* the point, now at the 3D level.
+    The cliff is real and reproducible, but its cause lives in the things a
+    single static pose doesn't capture: precise electrostatics, protonation,
+    ordered waters, and receptor dynamics. Fingerprints miss cliffs because they
+    only see 2D structure; here we see that even a full 3D model struggles. This
+    is why activity cliffs remain one of the genuinely hard problems in
+    computational drug discovery.
+
+    *(Predicted poses are hypotheses, not experimental structures. We use them
+    to reason about plausibility, not to assert a mechanism.)*
+
+    So what **can** learn the difference? The next sections bring in **neural
     fingerprints** — first a pretrained foundation model, then a small network we
     train on these very endpoints — to ask whether a representation *learned from
-    activity data* can do what a fixed structural one can't.
+    activity data* can do what fixed structure alone can't.
     """)
     return
 

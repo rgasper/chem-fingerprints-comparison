@@ -58,6 +58,19 @@ async function render({ model, el }) {
     const ligSel = { hetflag: true, not: { resn: ["HOH", "WAT"] } };
     viewer.setStyle(ligSel, { stick: { colorscheme: "greenCarbon", radius: 0.18 } });
 
+    // Optionally emphasize a named pocket residue (e.g. the anchoring Asp).
+    const res = model.get("highlight_resi");
+    if (res) {
+      viewer.setStyle(
+        { resi: res },
+        { stick: { colorscheme: "magentaCarbon", radius: 0.15 } }
+      );
+      viewer.addResLabels(
+        { resi: res },
+        { fontSize: 11, backgroundColor: "black", backgroundOpacity: 0.6 }
+      );
+    }
+
     // Highlighted ligand atoms (by serial), if any: fat orange spheres.
     const hi = model.get("highlight_serials") || [];
     if (hi.length) {
@@ -76,6 +89,7 @@ async function render({ model, el }) {
   build();
   model.on("change:structure", build);
   model.on("change:highlight_serials", build);
+  model.on("change:highlight_resi", build);
 }
 
 export default { render };
@@ -89,4 +103,5 @@ class ComplexViewer(anywidget.AnyWidget):
     structure = traitlets.Unicode("").tag(sync=True)  # PDB/CIF text
     format = traitlets.Unicode("pdb").tag(sync=True)
     highlight_serials = traitlets.List(traitlets.Int()).tag(sync=True)
+    highlight_resi = traitlets.Unicode("").tag(sync=True)  # e.g. "149" for Asp149
     height = traitlets.Int(420).tag(sync=True)
