@@ -201,13 +201,21 @@ def fingerprint_strip_svg(
         f'fill="{off_color}" stroke="#dee2e6" stroke-width="0.5" />',
     ]
     tick_w = max(1.0, inner_w / n_bits)
+    current_x = None
     for bit in sorted(on):
         x = pad + (bit / n_bits) * inner_w
-        color = current_color if bit == current_bit else on_color
-        w = max(tick_w, 2.0) if bit == current_bit else max(tick_w, 1.0)
+        if bit == current_bit:
+            current_x = x
+            continue  # draw the current bit last, on top, so it's never hidden
         parts.append(
-            f'<rect x="{x:.2f}" y="{pad}" width="{w:.2f}" height="{height - 2 * pad}" '
-            f'fill="{color}" />'
+            f'<rect x="{x:.2f}" y="{pad}" width="{max(tick_w, 1.0):.2f}" '
+            f'height="{height - 2 * pad}" fill="{on_color}" />'
+        )
+    if current_x is not None:
+        cw = max(tick_w, 4.0)
+        parts.append(
+            f'<rect x="{current_x - cw / 2:.2f}" y="0" width="{cw:.2f}" '
+            f'height="{height}" fill="{current_color}" />'
         )
     parts.append("</svg>")
     return "".join(parts)

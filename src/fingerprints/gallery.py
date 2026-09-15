@@ -43,7 +43,7 @@ GALLERY: tuple[GalleryMol, ...] = (
 
 
 def default_label() -> str:
-    return GALLERY[0].label
+    return "Penicillin G"
 
 
 def by_label() -> dict[str, GalleryMol]:

@@ -269,11 +269,11 @@ def _(bit_slider, current_mol, mo, mol_valid, mx, scrub_bits):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## 2 · The opposite idea — Morgan's atom environments
+    ## 2 · The most-used fingerprint: Morgan (ECFP)
 
-    MACCS asks a fixed list of expert questions. **Morgan** (the ECFP family,
-    the most-used fingerprint in modern cheminformatics) does the opposite: it
-    has *no* predefined patterns. For every atom it looks at the **circular
+    If you use one fingerprint in cheminformatics, it's this one. **Morgan**
+    (a.k.a. ECFP) takes a different tack from MACCS's fixed checklist: it has
+    *no* predefined patterns. For every atom it looks at the **circular
     neighborhood** growing outward — radius 0 (the atom alone), radius 1 (plus
     immediate neighbors), radius 2 (their neighbors too) — and hashes each of
     those environments into a bit.
@@ -508,11 +508,11 @@ def _(alt, current_mol, me, mo, mol_valid):
 @app.cell
 def _(mo):
     mo.md(r"""
-    Flip between the MACCS explorer above and this one on the **same molecule**:
-    MACCS highlights whole named motifs (a carbonyl, a ring), while Morgan
-    highlights many small overlapping neighborhoods. Two fundamentally different
-    ways to describe the same structure — which is exactly why they disagree
-    about what "similar" means.
+    MACCS and Morgan sit at two extremes: a fixed expert checklist versus
+    hashed local environments. On the **same molecule** they highlight totally
+    different things — whole named motifs vs. many small overlapping
+    neighborhoods. That's the first hint of a theme we'll keep hitting:
+    **"similar" means something different to every fingerprint.**
     """)
     return
 
@@ -520,72 +520,103 @@ def _(mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    ## 3 · Same molecule, six different fingerprints
+    ## 3 · The rest of the RDKit toolbox
 
-    MACCS and Morgan are just two of many. Each fingerprint below asks a
-    *different question* about the **same** structure — and produces a very
-    different vector. Notice how they disagree even on something as basic as
-    *how many bits light up*: a compact expert checklist (MACCS) versus dense
-    hashed paths (RDKit-topological) versus sparse atom environments (Morgan).
+    Beyond MACCS (a substructure-key fingerprint) and Morgan (a circular
+    atom-environment fingerprint), RDKit ships several more classical
+    fingerprints. They fall into a few families:
 
-    This is the whole point: **"similar" means something different to each
-    fingerprint.** Change the molecule above and watch every bar move.
+    - **Path-based** — hash linear walks through the molecular graph
+      (RDKit topological).
+    - **Atom-pair** — encode pairs of atoms and the distance between them.
+    - **Torsion-based** — encode short 4-atom backbone fragments
+      (topological torsion).
+
+    Browse them below — same molecule, same bit-highlight idea — to see how
+    each one "sees" structure differently. (They react to the molecule selector
+    at the top.)
     """)
     return
 
 
 @app.cell
-def _(alt, current_mol, mo, mol_valid):
-    from fingerprints import fp_overview as ov
+def _(current_mol, mo, mol_valid):
+    from fingerprints import classical_explorer as ce
 
-    if mol_valid:
-        _summaries = ov.summarize_all(current_mol)
-        # Altair accepts a list of dicts directly — no pandas/pyarrow needed.
-        _rows = [
-            {
-                "fingerprint": s.name,
-                "bits_on": s.n_on,
-                "n_features": s.n_features,
-                "density_pct": round(100 * s.density, 1),
-                "encodes": s.description,
-            }
-            for s in _summaries
-        ]
-        _chart = (
-            alt.Chart(alt.Data(values=_rows))
-            .mark_bar(cornerRadius=3)
-            .encode(
-                x=alt.X("bits_on:Q", title="number of bits set to 1"),
-                y=alt.Y("fingerprint:N", sort="-x", title=None),
-                color=alt.Color(
-                    "density_pct:Q",
-                    title="% of bits on",
-                    scale=alt.Scale(scheme="viridis"),
-                ),
-                tooltip=[
-                    alt.Tooltip("fingerprint:N"),
-                    alt.Tooltip("bits_on:Q", title="bits on"),
-                    alt.Tooltip("n_features:Q", title="total bits"),
-                    alt.Tooltip("density_pct:Q", title="% on"),
-                    alt.Tooltip("encodes:N", title="encodes"),
-                ],
+    # Each fingerprint gets its OWN top-level slider variable. marimo only tracks
+    # reactivity for mo.ui elements bound directly to a global name - sliders
+    # hidden inside a dict/list do NOT trigger downstream re-runs.
+    def _slider(key):
+        on = ce.on_bits(current_mol, key) if mol_valid else []
+        if on:
+            return mo.ui.slider(
+                start=0, stop=len(on) - 1, value=0,
+                label=f"Scrub the {len(on)} bits that are ON",
+                full_width=True, show_value=False,
             )
-            .properties(height=240, title="Bits set for the active molecule")
-        )
-        _view = mo.vstack(
-            [
-                mo.ui.altair_chart(_chart),
-                mo.md(
-                    "Hover a bar to read what that fingerprint encodes. The color "
-                    "shows *density* — what fraction of the whole vector is on — "
-                    "which is a rough proxy for how finely the fingerprint slices "
-                    "structure."
-                ),
-            ]
-        )
-    else:
-        _view = mo.md("*Select a valid molecule to compare fingerprints.*")
-    _view
+        return mo.ui.slider(start=0, stop=0, value=0, label="(no molecule)")
+
+    topo_slider = _slider("rdkit_topo")
+    ap_slider = _slider("atom_pair")
+    tt_slider = _slider("top_torsion")
+    return ap_slider, ce, topo_slider, tt_slider
+
+
+@app.cell
+def _(ap_slider, ce, current_mol, mo, mol_valid, topo_slider, tt_slider):
+    def _fp_tab(key, slider):
+        info = ce.FP_INFO[key]
+        on = ce.on_bits(current_mol, key) if mol_valid else []
+        if not (mol_valid and on):
+            body = mo.md("*Select a valid molecule.*")
+        else:
+            bit = on[min(slider.value, len(on) - 1)]
+            hit = ce.bit_hit(current_mol, key, bit)
+            svg = ce.highlight_svg(current_mol, hit, width=440, height=320)
+            strip = ce.fingerprint_strip_svg(current_mol, key, bit, width=900, height=34)
+            card = mo.vstack(
+                [
+                    mo.md(f"### Bit {hit.bit}"),
+                    mo.md(
+                        f"Set by **{hit.n_instances}** substructure"
+                        f"{'s' if hit.n_instances != 1 else ''} — highlighting "
+                        f"**{len(hit.atoms)} atoms**."
+                    ),
+                ]
+            )
+            body = mo.vstack(
+                [
+                    slider,
+                    mo.hstack([mo.Html(svg), card], justify="start", gap=2, widths=[3, 2]),
+                    mo.md("**Where this bit sits in the full 2048-bit vector:**"),
+                    mo.Html(strip),
+                ]
+            )
+        return mo.vstack([mo.md(f"*{info.blurb}*"), body])
+
+    tabbed_fps = mo.ui.tabs(
+        {
+            ce.FP_INFO["rdkit_topo"].label: _fp_tab("rdkit_topo", topo_slider),
+            ce.FP_INFO["atom_pair"].label: _fp_tab("atom_pair", ap_slider),
+            ce.FP_INFO["top_torsion"].label: _fp_tab("top_torsion", tt_slider),
+        }
+    )
+    tabbed_fps
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    **One more, without a highlight: Avalon.** Avalon is a path- and
+    feature-based fingerprint computed by a separate C++ toolkit that RDKit
+    wraps as a black box — it returns only the final bit vector, with **no
+    per-bit atom mapping**. So unlike the others, we can't point at which atoms
+    set each bit. That opacity is itself the lesson: a fingerprint's
+    interpretability depends on whether its implementation hands back
+    provenance. Avalon performs well on similarity tasks but won't tell you
+    *why*.
+    """)
     return
 
 
