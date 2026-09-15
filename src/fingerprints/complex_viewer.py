@@ -71,14 +71,30 @@ async function render({ model, el }) {
       );
     }
 
-    // Highlighted ligand atoms (by serial), if any: fat orange spheres.
-    const hi = model.get("highlight_serials") || [];
+    // Highlighted ligand atoms (by atom name), if any: fat orange spheres.
+    // Scoped to HETATM so ligand names can't collide with protein atom names.
+    const hi = model.get("highlight_atoms") || [];
     if (hi.length) {
       viewer.setStyle(
-        { serial: hi },
+        { hetflag: true, atom: hi },
         { stick: { colorscheme: "orangeCarbon", radius: 0.28 },
           sphere: { color: "orange", radius: 0.45 } }
       );
+    }
+
+    // Protein-ligand interactions (from PLIP): dashed lines colored by type.
+    const COLORS = {
+      saltbridge: "#ffd43b", hbond: "#4dabf7", pistack: "#20c997",
+      pication: "#e64980", hydrophobic: "#adb5bd",
+    };
+    const interactions = model.get("interactions") || [];
+    for (const it of interactions) {
+      const c = COLORS[it.type] || "#868e96";
+      viewer.addCylinder({
+        start: { x: it.lig_xyz[0], y: it.lig_xyz[1], z: it.lig_xyz[2] },
+        end: { x: it.prot_xyz[0], y: it.prot_xyz[1], z: it.prot_xyz[2] },
+        radius: 0.06, color: c, dashed: true, fromCap: 1, toCap: 1,
+      });
     }
 
     // Center + orient consistently across panels: zoom to the ligand, then set
@@ -95,8 +111,9 @@ async function render({ model, el }) {
 
   build();
   model.on("change:structure", build);
-  model.on("change:highlight_serials", build);
+  model.on("change:highlight_atoms", build);
   model.on("change:highlight_resi", build);
+  model.on("change:interactions", build);
 }
 
 export default { render };
@@ -109,6 +126,7 @@ class ComplexViewer(anywidget.AnyWidget):
     _esm = _ESM
     structure = traitlets.Unicode("").tag(sync=True)  # PDB/CIF text
     format = traitlets.Unicode("pdb").tag(sync=True)
-    highlight_serials = traitlets.List(traitlets.Int()).tag(sync=True)
+    highlight_atoms = traitlets.List(traitlets.Unicode()).tag(sync=True)  # ligand atom names
     highlight_resi = traitlets.Unicode("").tag(sync=True)  # e.g. "149" for Asp149
+    interactions = traitlets.List(traitlets.Dict()).tag(sync=True)  # PLIP records
     height = traitlets.Int(420).tag(sync=True)

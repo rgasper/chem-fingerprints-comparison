@@ -75,6 +75,20 @@ def load_all(pair: str = "mu_vs_kappa", index: int = 2) -> dict[str, Pose]:
     return out
 
 
+def load_interactions(pose: Pose) -> list[dict]:
+    """PLIP interaction records for a pose (empty list if not yet computed).
+
+    Written by ``scripts/detect_interactions.py`` next to each pose's CIF.
+    """
+    path = POSE_DIR / f"{pose.tag}.interactions.json"
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
 def _atom_site(cif_text: str) -> tuple[dict[str, int], list[list[str]]]:
     lines = cif_text.splitlines()
     i = 0
@@ -156,15 +170,24 @@ def _ligand_block(cif_text: str) -> tuple[list[int], list[str], list[tuple[float
     return serials, elements, coords
 
 
-def changed_atom_serials(pose: Pose, other: Pose) -> list[int]:
-    """CIF serials of `pose`'s ligand atoms that differ from `other`'s ligand.
+def _ligand_atom_names(cif_text: str) -> list[str]:
+    """Ligand atom names (label_atom_id) in CIF file order."""
+    idx, rows = _atom_site(cif_text)
+    gx = idx["group_PDB"]
+    la = idx["label_atom_id"]
+    return [r[la] for r in rows if r[gx] == "HETATM"]
+
+
+def changed_atom_names(pose: Pose, other: Pose) -> list[str]:
+    """CIF atom *names* of `pose`'s ligand atoms that differ from `other`'s.
 
     Determined chemically via the maximum common substructure of the two
     ligand SMILES (not geometrically — the two ligands were folded into
     different receptors, so their coordinate frames don't superimpose). Boltz
     orders the CIF ligand atoms to match the input SMILES atom order, so the
-    RDKit changed-atom indices map directly onto the CIF ligand serials by
-    position.
+    RDKit changed-atom indices map onto the CIF ligand atoms by position; we
+    return their unique atom *names* (e.g. "O26") because 3Dmol selects reliably
+    by atom name, not by the CIF numeric id.
     """
     from rdkit import Chem
     from rdkit.Chem import rdFMCS
@@ -185,6 +208,6 @@ def changed_atom_serials(pose: Pose, other: Pose) -> list[int]:
     core = set(mol.GetSubstructMatch(patt)) if patt is not None else set()
     changed_idx = [a.GetIdx() for a in mol.GetAtoms() if a.GetIdx() not in core]
 
-    serials, _elements, _coords = _ligand_block(pose.cif_text)
-    # CIF ligand atoms are in SMILES (heavy-atom) order; map index -> serial.
-    return [serials[i] for i in changed_idx if i < len(serials)]
+    names = _ligand_atom_names(pose.cif_text)
+    # CIF ligand atoms are in SMILES (heavy-atom) order; map index -> name.
+    return [names[i] for i in changed_idx if i < len(names)]

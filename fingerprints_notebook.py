@@ -808,8 +808,16 @@ def _(mo):
     <span style="color:#e8820c">**orange atom**</span> is the one that changes
     across the cliff, and <span style="color:#c026a3">**magenta**</span> is the
     conserved aspartate (D3.32) that every aminergic-GPCR ligand's amine anchors
-    to — confirming the poses land in the real orthosteric pocket. *(The picker
-    above drives this; poses are precomputed, so only folded cliffs show 3D.)*
+    to — confirming the poses land in the real orthosteric pocket. Dashed lines
+    are protein–ligand interactions detected by
+    [PLIP](https://github.com/pharmai/plip):
+    <span style="color:#e0a800">**salt bridge**</span>,
+    <span style="color:#4dabf7">**H-bond**</span>,
+    <span style="color:#20c997">**π-stack**</span>,
+    <span style="color:#e64980">**π-cation**</span>,
+    <span style="color:#adb5bd">**hydrophobic**</span>.
+    *(The picker above drives this; poses are precomputed, so only folded cliffs
+    show 3D.)*
     """)
     return
 
@@ -841,12 +849,13 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
 
         def _panel(mol_id, target, counterpart_mol, title):
             p = _poses[f"{mol_id}_{target}"]
-            changed = pv.changed_atom_serials(p, _poses[f"{counterpart_mol}_{target}"])
+            changed = pv.changed_atom_names(p, _poses[f"{counterpart_mol}_{target}"])
             v = ComplexViewer(
                 structure=p.cif_text,
                 format="cif",
                 highlight_resi=_anchor_resi(p),
-                highlight_serials=changed,
+                highlight_atoms=changed,
+                interactions=pv.load_interactions(p),
                 height=340,
             )
             cap = mo.md(

@@ -36,6 +36,7 @@ dependencies = [
     "pyarrow>=25.0.1",
     "anywidget>=0.11.0",
     "boltz-api>=0.50.0",
+    "plip>=3.0.1",
 ]
 
 [dependency-groups]
