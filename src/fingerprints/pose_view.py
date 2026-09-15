@@ -39,6 +39,20 @@ def load_manifest(pair: str = "mu_vs_kappa", index: int = 2) -> list[dict]:
     return json.loads(path.read_text())
 
 
+def has_poses(pair: str, index: int) -> bool:
+    """True if all four poses for this cliff have been folded and cached."""
+    manifest = POSE_DIR / f"{pair}_{index}_manifest.json"
+    if not manifest.exists():
+        return False
+    try:
+        entries = json.loads(manifest.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+    return len(entries) == 4 and all(
+        (POSE_DIR / e["cif_file"]).exists() for e in entries
+    )
+
+
 def load_pose(entry: dict) -> Pose:
     cif = (POSE_DIR / entry["cif_file"]).read_text()
     return Pose(

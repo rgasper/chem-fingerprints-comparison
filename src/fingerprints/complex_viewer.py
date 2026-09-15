@@ -81,8 +81,15 @@ async function render({ model, el }) {
       );
     }
 
+    // Center + orient consistently across panels: zoom to the ligand, then set
+    // a fixed camera orientation so every complex starts from the same angle
+    // (otherwise 3Dmol picks an arbitrary orientation per structure).
     viewer.zoomTo(ligSel);
     viewer.zoom(0.7);
+    // setView([cx, cy, cz, zoom, qx, qy, qz, qw]) - identity-ish quaternion
+    // gives a reproducible front-on view; keep the zoomTo-derived center.
+    const v = viewer.getView();
+    viewer.setView([v[0], v[1], v[2], v[3], 0, 0, 0, 1]);
     viewer.render();
   }
 

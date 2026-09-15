@@ -801,87 +801,101 @@ def _(mo):
     surely the **3D structure** — the ligand actually sitting in each pocket —
     would reveal *why* the same change matters on one receptor and not the other?
 
-    We co-folded **both** ligands of the mu/kappa "ring CH₂→NH" cliff into
-    **both** receptors with [Boltz-2](https://github.com/jwohlwend/boltz) (a
-    state-of-the-art structure predictor), giving four predicted complexes.
-    Rotate them below. Each ligand's basic amine anchors to the conserved
-    <span style="color:#c026a3">**aspartate (D3.32, magenta)**</span> that every
-    aminergic-GPCR ligand grabs — confirming the poses land in the real
-    orthosteric pocket.
+    For the cliff pairs we co-folded with
+    [Boltz-2](https://github.com/jwohlwend/boltz) (a state-of-the-art structure
+    predictor), the four predicted complexes appear below — both molecules in
+    both receptors. Rotate them; they start from a common orientation. The
+    <span style="color:#e8820c">**orange atom**</span> is the one that changes
+    across the cliff, and <span style="color:#c026a3">**magenta**</span> is the
+    conserved aspartate (D3.32) that every aminergic-GPCR ligand's amine anchors
+    to — confirming the poses land in the real orthosteric pocket. *(The picker
+    above drives this; poses are precomputed, so only folded cliffs show 3D.)*
     """)
     return
 
 
 @app.cell
-def _(mo):
+def _(cliff_choice, ctx, mo, target_pair_choice):
     from fingerprints import pose_view as pv
     from fingerprints.complex_viewer import ComplexViewer
 
-    _poses = pv.load_all("mu_vs_kappa", 2)
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _cliff = _tp.cliffs[cliff_choice.value]
+    _pair_key, _idx = _tp.key, cliff_choice.value
 
-    # The anchoring Asp residue number differs per receptor; pull it from the
-    # pocket analysis so the label is correct for each pose.
-    def _anchor_resi(pose):
-        for rn, seq, _d in pv.pocket_residues(pose.cif_text):
-            if rn == "ASP":
-                return seq
-        return ""
+    if not pv.has_poses(_pair_key, _idx):
+        _view = mo.md(
+            f"*No precomputed 3D poses for this cliff yet ({_tp.target_a} vs "
+            f"{_tp.target_b}, pair {_idx + 1}). Poses were folded offline with "
+            "Boltz-2 for a subset of cliffs — pick one of those, or run "
+            "`scripts/boltz_fold_cliffs.py` to add this one.*"
+        ).callout(kind="info")
+    else:
+        _poses = pv.load_all(_pair_key, _idx)
 
-    def _panel(key, counterpart_key, title):
-        p = _poses[key]
-        changed = pv.changed_atom_serials(p, _poses[counterpart_key])
-        v = ComplexViewer(
-            structure=p.cif_text,
-            format="cif",
-            highlight_resi=_anchor_resi(p),
-            highlight_serials=changed,
-            height=340,
+        def _anchor_resi(pose):
+            for rn, seq, _d in pv.pocket_residues(pose.cif_text):
+                if rn == "ASP":
+                    return seq
+            return ""
+
+        def _panel(mol_id, target, counterpart_mol, title):
+            p = _poses[f"{mol_id}_{target}"]
+            changed = pv.changed_atom_serials(p, _poses[f"{counterpart_mol}_{target}"])
+            v = ComplexViewer(
+                structure=p.cif_text,
+                format="cif",
+                highlight_resi=_anchor_resi(p),
+                highlight_serials=changed,
+                height=340,
+            )
+            cap = mo.md(
+                f"**{title}**  \nBoltz binding confidence "
+                f"**{p.binding_confidence:.2f}**, ligand ipTM **{p.ligand_iptm:.2f}**"
+            )
+            return mo.vstack([cap, mo.ui.anywidget(v)])
+
+        _ta, _tb = _tp.target_a, _tp.target_b
+        _view = mo.vstack(
+            [
+                mo.md(f"#### Molecule 1 — *{_cliff.change}* (before)"),
+                mo.hstack(
+                    [
+                        _panel("mol1", _ta, "mol2", f"in {_ta} — pKi {_cliff.pki_1_a}"),
+                        _panel("mol1", _tb, "mol2", f"in {_tb} — pKi {_cliff.pki_1_b}"),
+                    ],
+                    widths=[1, 1],
+                    gap=1,
+                ),
+                mo.md("#### Molecule 2 — after the change"),
+                mo.hstack(
+                    [
+                        _panel("mol2", _ta, "mol1", f"in {_ta} — pKi {_cliff.pki_2_a}"),
+                        _panel("mol2", _tb, "mol1", f"in {_tb} — pKi {_cliff.pki_2_b}"),
+                    ],
+                    widths=[1, 1],
+                    gap=1,
+                ),
+            ]
         )
-        cap = mo.md(
-            f"**{title}**  \nBoltz binding confidence "
-            f"**{p.binding_confidence:.2f}**, ligand ipTM **{p.ligand_iptm:.2f}**"
-        )
-        return mo.vstack([cap, mo.ui.anywidget(v)])
-
-    mo.vstack(
-        [
-            mo.md(
-                "#### The potent-on-μ molecule (ring CH₂)\n\nThe "
-                "<span style='color:#e8820c'>**orange atom**</span> is the one that "
-                "changes across the cliff; "
-                "<span style='color:#c026a3'>**magenta**</span> is the anchoring "
-                "aspartate."
-            ),
-            mo.hstack(
-                [
-                    _panel("mol1_mu-opioid", "mol2_mu-opioid", "in μ-opioid — pKi 10.2 (potent)"),
-                    _panel("mol1_kappa-opioid", "mol2_kappa-opioid", "in κ-opioid — pKi 10.5 (potent)"),
-                ],
-                widths=[1, 1],
-                gap=1,
-            ),
-            mo.md("#### The weak-on-μ molecule (ring NH — the only change)"),
-            mo.hstack(
-                [
-                    _panel("mol2_mu-opioid", "mol1_mu-opioid", "in μ-opioid — pKi 7.3 (810× weaker!)"),
-                    _panel("mol2_kappa-opioid", "mol1_kappa-opioid", "in κ-opioid — pKi 9.7 (still potent)"),
-                ],
-                widths=[1, 1],
-                gap=1,
-            ),
-        ]
-    )
+    _view
     return
 
 
 @app.cell
 def _(mo):
     mo.md(r"""
-    **The honest result:** Boltz poses all four complexes *almost identically*,
-    with uniformly high confidence (0.93–0.99). The new NH lands ~3.8 Å from the
-    anchoring aspartate in **both** the μ pocket (where it costs 810× potency)
-    and the κ pocket (where it costs nothing). Even a state-of-the-art structure
-    predictor sees no obvious reason for the cliff.
+    **The honest result:** across these cliffs, Boltz places the two molecules
+    in near-identical poses in each pocket, anchored the same way by the
+    conserved aspartate — and often with similar confidence on the target where
+    the pair is a cliff and the one where it's flat. The changed atom lands in
+    essentially the same spot regardless of receptor. Even a state-of-the-art
+    structure predictor rarely shows an *obvious* reason for the cliff.
+
+    (On the μ/κ "ring CH₂→NH" pair, for instance, all four complexes score
+    0.93–0.99 and the new NH sits ~3.8 Å from the anchoring aspartate in **both**
+    the μ pocket, where it costs 810× potency, and the κ pocket, where it costs
+    nothing.)
 
     That's not a failure of the demo — it *is* the point, now at the 3D level.
     The cliff is real and reproducible, but its cause lives in the things a
