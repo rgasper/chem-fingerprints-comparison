@@ -20,37 +20,7 @@ def _(mo):
     mo.md(r"""
     # Molecular Fingerprints, Made Tangible
 
-    *A molab Notebook Competition entry — the history, mechanics, applications,
-    and limitations of molecular fingerprints in cheminformatics.*
-
-    A **molecular fingerprint** turns a molecule into a vector of numbers so a
-    computer can ask "how similar are these two molecules?" without understanding
-    chemistry. Fingerprints are the workhorse behind similarity search, clustering,
-    and cheap ADMET models. But they all encode *different* notions of similarity —
-    and each has blind spots.
-
-    **Pick a molecule once, below. Everything in this notebook reacts to it.**
-    That's marimo's reactive dataflow: change the molecule and every visualization
-    downstream recomputes, so you can build intuition by exploration.
-
-    ---
-
-    The notebook has two parts, tracing one argument:
-
-    - **Part I — Deterministic fingerprints.** MACCS, Morgan/ECFP, and the RDKit
-      toolbox: features *we* design and impose. We see how they work, then watch
-      them break on **activity cliffs** — and ask whether 3D poses rescue them.
-    - **Part II — Data-learned fingerprints.** Bits read off a binding event, then
-      a graph neural network that **learns its own fingerprint** from activity
-      alone — with an honest look at what that buys and what it costs.
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ## The molecule selector — the one input everything flows from
+    *A molab Notebook Competition entry.*
     """)
     return
 
@@ -130,41 +100,6 @@ def _(current_mol, mo, mol_valid, mx):
     else:
         _view = mo.md("*No valid molecule selected.*")
     _view
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ## Part I · Deterministic fingerprints — features *we* impose
-
-    A fingerprint turns a molecule into a vector so a computer can compare
-    structures. The classic ones are **deterministic**: a fixed recipe *we*
-    designed decides what to look at — a checklist of substructures, circular
-    atom environments, hashed paths. Same molecule in, same bits out, every
-    time. Powerful and interpretable — but as we'll see, stuck with whatever
-    blind spots our chosen recipe has.
-
-    ### What *is* a fingerprint? Start with MACCS
-
-    MACCS keys are the friendliest fingerprint to learn from: a fixed list of
-    **166 predefined structural questions** ("is there a carbonyl?", "an aromatic
-    ring?", "a chlorine?"). Most questions are written as a
-    [SMARTS](https://www.daylight.com/dayhtml/doc/theory/theory.smarts.html)
-    pattern; a bit is **1** if the molecule contains that substructure. A handful
-    of keys are *count-based* — they only turn on past a threshold (e.g. "more
-    than 3 oxygens") — and three keys are *special*, computed directly rather
-    than by pattern-matching. That's the whole fingerprint: a 166-long checklist.
-
-    Because every bit *is* a named substructure, we can describe each one in
-    **plain English**, show the **pattern it's looking for** (drawn from its
-    definition, independent of any molecule), point to **where it matches** on
-    the active molecule, and mark where the bit sits within the **whole
-    fingerprint**. Scrub through all 166 keys — the ones that are *on* tell you
-    what the molecule has, and the *off* ones are just as informative: they tell
-    you what it's **missing**. (The terse original SMARTS is tucked under
-    "Technical details" — nobody reads those at a glance anyway.)
-    """)
     return
 
 
@@ -290,27 +225,6 @@ def _(bit_slider, current_mol, mo, mol_valid, mx, scrub_bits):
 
 
 @app.cell
-def _(mo):
-    mo.md(r"""
-    ### The most-used fingerprint: Morgan (ECFP)
-
-    If you use one fingerprint in cheminformatics, it's this one. **Morgan**
-    (a.k.a. ECFP) takes a different tack from MACCS's fixed checklist: it has
-    *no* predefined patterns. For every atom it looks at the **circular
-    neighborhood** growing outward — radius 0 (the atom alone), radius 1 (plus
-    immediate neighbors), radius 2 (their neighbors too) — and hashes each of
-    those environments into a bit.
-
-    So a Morgan bit has no human name. But we can still show exactly what it
-    means: **scrub the slider** and each bit lights up the atom environment that
-    produced it. The <span style="color:#f25a40">**red center atom**</span> is
-    where the environment grew from; the <span style="color:#338cf2">**blue
-    shading**</span> is how far it reached.
-    """)
-    return
-
-
-@app.cell
 def _(current_mol, mo, mol_valid):
     from fingerprints import morgan_explorer as me
 
@@ -392,26 +306,6 @@ def _(current_mol, me, mo, mol_valid, morgan_on_bits, morgan_slider):
     else:
         _view = mo.md("")
     _view
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ### Why is Morgan 2048 bits long? Hash collisions.
-
-    Morgan has *no* fixed vocabulary, so it can't reserve a slot per feature the
-    way MACCS does. Instead it **hashes** each atom environment into one of a
-    fixed number of bits. When two *different* environments hash to the **same**
-    bit, that's a **collision** — the fingerprint literally cannot tell them
-    apart anymore.
-
-    Let's *see* it. Below we deliberately fold the active molecule into an
-    absurdly short **8-bit** Morgan fingerprint and find the bits that ended up
-    shared. Each colored region is a **different** substructure — but the short
-    fingerprint records them all as the *same* single bit. Scrub through the
-    collisions:
-    """)
     return
 
 
@@ -531,40 +425,6 @@ def _(alt, current_mol, me, mo, mol_valid, pd):
 
 
 @app.cell
-def _(mo):
-    mo.md(r"""
-    MACCS and Morgan sit at two extremes: a fixed expert checklist versus
-    hashed local environments. On the **same molecule** they highlight totally
-    different things — whole named motifs vs. many small overlapping
-    neighborhoods. That's the first hint of a theme we'll keep hitting:
-    **"similar" means something different to every fingerprint.**
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ### The rest of the RDKit toolbox
-
-    Beyond MACCS (a substructure-key fingerprint) and Morgan (a circular
-    atom-environment fingerprint), RDKit ships several more classical
-    fingerprints. They fall into a few families:
-
-    - **Path-based** — hash linear walks through the molecular graph
-      (RDKit topological).
-    - **Atom-pair** — encode pairs of atoms and the distance between them.
-    - **Torsion-based** — encode short 4-atom backbone fragments
-      (topological torsion).
-
-    Browse them below — same molecule, same bit-highlight idea — to see how
-    each one "sees" structure differently. (They react to the molecule selector
-    at the top.)
-    """)
-    return
-
-
-@app.cell
 def _(current_mol, mo, mol_valid):
     from fingerprints import classical_explorer as ce
 
@@ -627,48 +487,6 @@ def _(ap_slider, ce, current_mol, mo, mol_valid, topo_slider, tt_slider):
         }
     )
     tabbed_fps
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    **One more, without a highlight: Avalon.** Avalon is a path- and
-    feature-based fingerprint computed by a separate C++ toolkit that RDKit
-    wraps as a black box — it returns only the final bit vector, with **no
-    per-bit atom mapping**. So unlike the others, we can't point at which atoms
-    set each bit. That opacity is itself the lesson: a fingerprint's
-    interpretability depends on whether its implementation hands back
-    provenance. Avalon performs well on similarity tasks but won't tell you
-    *why*.
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ---
-
-    ### Where fingerprints break: activity cliffs
-
-    Everything so far rests on one assumption: **similar structure → similar
-    behavior**. That's why fingerprints work for search and cheap property
-    models. **Activity cliffs** are the pairs where it fails — a tiny structural
-    change causing a huge change in potency.
-
-    Here's the twist that makes them genuinely hard: a cliff is **not a property
-    of the molecule pair alone — it depends on the endpoint you ask about.** The
-    same one-atom swap can be a 100× cliff for one target and completely flat for
-    a closely related one. A fingerprint sees only structure, so it assigns *one*
-    similarity to the pair — and that single number is right for the endpoint
-    where the pair is flat and badly wrong for the endpoint where it's a cliff.
-
-    Pick a target pair and a molecule pair below and see it happen. (These pairs
-    are curated from the [MoleculeACE](https://github.com/molML/MoleculeACE)
-    benchmark — each is a real medicinal-chemistry change, hand-checked so
-    there are no tautomer or assay-artifact traps.)
-    """)
     return
 
 
@@ -792,56 +610,6 @@ def _(alt, cliff_choice, ctx, cv, mo, pd, target_pair_choice):
             _punchline,
         ]
     )
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    **Why this is the hard case.** A cliff isn't noise — these are real,
-    reproducible measurements. It's that the property surface is genuinely
-    *rugged* in a way a structure-only representation can't anticipate, and
-    *differently* rugged for every target. (As a sanity check: two targets with
-    near-identical binding sites — JAK1 and JAK2 — share hundreds of molecules
-    but yield **zero** context-dependent cliffs in this benchmark. Cliffs only
-    appear where the biology actually diverges.)
-
-    So what can learn the difference? Before we get there, let's look at the
-    cliff in **3D** — does the physical picture explain it?
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ### Does 3D structure explain the cliff?
-
-    Fingerprints only see the 2D graph, so of course they miss the cliff. But
-    surely the **3D structure** — the ligand actually sitting in each pocket —
-    would reveal *why* the same change matters on one receptor and not the other?
-
-    For the cliff pairs we co-folded with
-    [Boltz-2](https://github.com/jwohlwend/boltz) (a state-of-the-art structure
-    predictor), the four predicted complexes appear below. The table sums up the
-    story: the same two molecules, scored on both targets — one column is a
-    potency cliff, the other is flat. The 3D views are **grouped by target** so
-    you can compare the two molecules in the *same* pocket side by side. Rotate
-    them; they start from a common orientation. The
-    <span style="color:#e8820c">**orange atom**</span> is the one that changes
-    across the cliff, and <span style="color:#c026a3">**magenta**</span> is the
-    conserved aspartate (D3.32) that every aminergic-GPCR ligand's amine anchors
-    to — confirming the poses land in the real orthosteric pocket. Dashed lines
-    are protein–ligand interactions detected by
-    [PLIP](https://github.com/pharmai/plip):
-    <span style="color:#e0a800">**salt bridge**</span>,
-    <span style="color:#4dabf7">**H-bond**</span>,
-    <span style="color:#20c997">**π-stack**</span>,
-    <span style="color:#e64980">**π-cation**</span>,
-    <span style="color:#adb5bd">**hydrophobic**</span>.
-    *(The picker above drives this; poses are precomputed, so only folded cliffs
-    show 3D.)*
-    """)
     return
 
 
@@ -1053,83 +821,6 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
 
 @app.cell
 def _(mo):
-    mo.md(r"""
-    **The honest result:** across these cliffs, Boltz places the two molecules
-    in near-identical poses in each pocket, anchored the same way by the
-    conserved aspartate — and often with similar confidence on the target where
-    the pair is a cliff and the one where it's flat. The changed atom lands in
-    essentially the same spot regardless of receptor. Even a state-of-the-art
-    structure predictor rarely shows an *obvious* reason for the cliff.
-
-    (On the μ/κ "ring CH₂→NH" pair, for instance, all four complexes score
-    0.93–0.99 and the new NH sits ~3.8 Å from the anchoring aspartate in **both**
-    the μ pocket, where it costs 810× potency, and the κ pocket, where it costs
-    nothing.)
-
-    That's not a failure of the demo — it *is* the point, now at the 3D level.
-    The cliff is real and reproducible, but its cause lives in the things a
-    single static pose doesn't capture: precise electrostatics, protonation,
-    ordered waters, and receptor dynamics. Fingerprints miss cliffs because they
-    only see 2D structure; here we see that even a full 3D model struggles. This
-    is why activity cliffs remain one of the genuinely hard problems in
-    computational drug discovery.
-
-    *(Predicted poses are hypotheses, not experimental structures. We use them
-    to reason about plausibility, not to assert a mechanism.)*
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ## Part II · Data-learned fingerprints — features the *data* defines
-
-    Step back and notice the pattern. Part I built fingerprints by
-    **imposing a lens**: MACCS's expert checklist, Morgan's circular
-    environments, path and torsion hashes. *We* decided what a molecule's
-    features are — and then the activity cliffs showed the cost: that fixed lens
-    is blind to them, because "similar structure" was *our* rule, not the
-    biology's.
-
-    The interaction fingerprint above is the first hint of the opposite move.
-    Its bits weren't designed by us — they're **read off the binding event**:
-    the pose tells us which contacts matter. The fingerprint came *from the
-    data*.
-
-    The next section pushes that idea all the way. Instead of hand-designing
-    features, we let a model **learn** the representation — a small network we
-    train ourselves on these very endpoints, reading nothing but the raw
-    molecular graph. The question throughout: can a fingerprint *learned from
-    activity data* do what a fixed structural one can't — and what does it cost
-    us when we try?
-    """)
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ### A fingerprint the data learns — and the catch
-
-    Now we let the data define the representation *end to end*. A
-    [chemprop](https://github.com/chemprop/chemprop) **D-MPNN** (message-passing
-    graph neural network) reads the raw molecular graph and **learns its own
-    fingerprint**, driven only by the activity labels — no MACCS keys, no Morgan
-    radius, no features we chose. (Feeding a fixed fingerprint into a network
-    would just smuggle our imposed lens back in; the whole point is to let the
-    graph speak.)
-
-    We train it on the **two related endpoints from the pair you picked above**,
-    at once — one shared learned fingerprint feeding two prediction heads. One
-    knob, **α**, sets how much the training loss cares about the first endpoint
-    vs. the second. Slide it and watch what the data gives you.
-    """)
-    return
-
-
-@app.cell
-def _(mo):
     alpha_knob = mo.ui.slider(
         start=0.0,
         stop=1.0,
@@ -1286,34 +977,6 @@ def _(alpha_knob, alt, ctx, mo, pd, target_pair_choice):
             ]
         )
     _view
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    **The catch — and the payoff of the whole notebook.** Push α all the way to
-    one endpoint and the model learns a fingerprint that's excellent there and
-    *useless* on the other (R² near zero). There's a broad middle where one
-    shared representation serves both endpoints decently — but you can't have it
-    all: the fingerprint the data gives you **depends on which question you ask
-    it**.
-
-    That's the arc closing. Fixed fingerprints (MACCS, Morgan) impose one lens
-    and are stuck with its blind spots — the activity cliff. Learned
-    representations remove the imposed lens, but they don't escape the deeper
-    truth: *there is no single, universal "similar"*. Structure only means
-    something **relative to a question** — a target, an endpoint, an assay. Both
-    halves of this notebook — the interaction fingerprint read off a pose, and
-    the D-MPNN trained on labels — are the same move: stop dictating how the
-    molecule should be a vector, and let the phenomenon tell you.
-
-    *Rigor note: the numbers above are a deliberately simplified, in-notebook
-    demo (one scaffold split, 3 seeds, a small D-MPNN). A fuller offline
-    benchmark — 5×5-fold CV comparing the learned fingerprint against models on
-    fixed fingerprints, with proper significance testing — tells the same story
-    more carefully; see the repo.*
-    """)
     return
 
 
