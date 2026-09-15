@@ -803,8 +803,11 @@ def _(mo):
 
     For the cliff pairs we co-folded with
     [Boltz-2](https://github.com/jwohlwend/boltz) (a state-of-the-art structure
-    predictor), the four predicted complexes appear below — both molecules in
-    both receptors. Rotate them; they start from a common orientation. The
+    predictor), the four predicted complexes appear below. The table sums up the
+    story: the same two molecules, scored on both targets — one column is a
+    potency cliff, the other is flat. The 3D views are **grouped by target** so
+    you can compare the two molecules in the *same* pocket side by side. Rotate
+    them; they start from a common orientation. The
     <span style="color:#e8820c">**orange atom**</span> is the one that changes
     across the cliff, and <span style="color:#c026a3">**magenta**</span> is the
     conserved aspartate (D3.32) that every aminergic-GPCR ligand's amine anchors
@@ -823,7 +826,7 @@ def _(mo):
 
 
 @app.cell
-def _(cliff_choice, ctx, mo, target_pair_choice):
+def _(cliff_choice, ctx, cv, mo, target_pair_choice):
     from fingerprints import pose_view as pv
     from fingerprints.complex_viewer import ComplexViewer
 
@@ -847,7 +850,16 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
                     return seq
             return ""
 
-        def _panel(mol_id, target, counterpart_mol, title):
+        def _potency_word(pki):
+            if pki >= 9.0:
+                return "very potent", "#2b8a3e"
+            if pki >= 7.5:
+                return "potent", "#40a060"
+            if pki >= 6.0:
+                return "moderate", "#e8820c"
+            return "weak", "#e03131"
+
+        def _panel(mol_id, target, counterpart_mol, pki):
             p = _poses[f"{mol_id}_{target}"]
             changed = pv.changed_atom_names(p, _poses[f"{counterpart_mol}_{target}"])
             v = ComplexViewer(
@@ -856,31 +868,77 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
                 highlight_resi=_anchor_resi(p),
                 highlight_atoms=changed,
                 interactions=pv.load_interactions(p),
-                height=340,
+                height=320,
             )
-            cap = mo.md(
-                f"**{title}**  \nBoltz binding confidence "
-                f"**{p.binding_confidence:.2f}**, ligand ipTM **{p.ligand_iptm:.2f}**"
+            _word, _color = _potency_word(pki)
+            _mol_name = "molecule 1" if mol_id == "mol1" else "molecule 2"
+            badge = mo.md(
+                f"<div style='text-align:center'>"
+                f"<b>{_mol_name}</b> — pKi <b>{pki}</b> "
+                f"<span style='color:{_color}'><b>({_word})</b></span></div>"
             )
-            return mo.vstack([cap, mo.ui.anywidget(v)])
+            return mo.vstack([badge, mo.ui.anywidget(v)])
 
         _ta, _tb = _tp.target_a, _tp.target_b
+
+        # Summary table first: molecule x target grid so the cliff is obvious
+        # before looking at any 3D. The cliff target's cells are boxed.
+        def _cell(pki, is_cliff_target):
+            _word, _color = _potency_word(pki)
+            _border = "2px solid #e03131" if is_cliff_target else "1px solid #dee2e6"
+            return (
+                f"<td style='border:{_border};padding:6px 14px;text-align:center'>"
+                f"pKi <b>{pki}</b><br>"
+                f"<span style='color:{_color};font-size:12px'>{_word}</span></td>"
+            )
+
+        _cliff_on = _cliff.cliff_on
+        _table = (
+            "<table style='border-collapse:collapse;margin:0 auto'>"
+            f"<tr><th></th>"
+            f"<th style='padding:4px 14px'>{_ta}</th>"
+            f"<th style='padding:4px 14px'>{_tb}</th></tr>"
+            f"<tr><td style='padding:4px 10px;text-align:right'><b>molecule 1</b></td>"
+            + _cell(_cliff.pki_1_a, _cliff_on == _ta)
+            + _cell(_cliff.pki_1_b, _cliff_on == _tb)
+            + "</tr>"
+            f"<tr><td style='padding:4px 10px;text-align:right'><b>molecule 2</b><br>"
+            f"<span style='font-size:11px;color:#868e96'>({_cliff.change})</span></td>"
+            + _cell(_cliff.pki_2_a, _cliff_on == _ta)
+            + _cell(_cliff.pki_2_b, _cliff_on == _tb)
+            + "</tr></table>"
+        )
+        _summary = mo.vstack(
+            [
+                mo.Html(_table),
+                mo.md(
+                    f"The red-boxed column is **{_cliff_on}**, where the one-atom "
+                    f"change is a **{cv.fold_change(max(_cliff.delta_a, _cliff.delta_b))} "
+                    f"cliff**. On the other target it barely moves. Same two "
+                    "molecules, both columns — the poses below are grouped by "
+                    "target so you can compare the two molecules in the *same* "
+                    "pocket side by side."
+                ),
+            ]
+        )
+
         _view = mo.vstack(
             [
-                mo.md(f"#### Molecule 1 — *{_cliff.change}* (before)"),
+                _summary,
+                mo.md(f"#### Both molecules in {_ta}"),
                 mo.hstack(
                     [
-                        _panel("mol1", _ta, "mol2", f"in {_ta} — pKi {_cliff.pki_1_a}"),
-                        _panel("mol1", _tb, "mol2", f"in {_tb} — pKi {_cliff.pki_1_b}"),
+                        _panel("mol1", _ta, "mol2", _cliff.pki_1_a),
+                        _panel("mol2", _ta, "mol1", _cliff.pki_2_a),
                     ],
                     widths=[1, 1],
                     gap=1,
                 ),
-                mo.md("#### Molecule 2 — after the change"),
+                mo.md(f"#### Both molecules in {_tb}"),
                 mo.hstack(
                     [
-                        _panel("mol2", _ta, "mol1", f"in {_ta} — pKi {_cliff.pki_2_a}"),
-                        _panel("mol2", _tb, "mol1", f"in {_tb} — pKi {_cliff.pki_2_b}"),
+                        _panel("mol1", _tb, "mol2", _cliff.pki_1_b),
+                        _panel("mol2", _tb, "mol1", _cliff.pki_2_b),
                     ],
                     widths=[1, 1],
                     gap=1,
