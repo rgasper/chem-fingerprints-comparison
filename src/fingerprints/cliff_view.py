@@ -1,0 +1,104 @@
+"""Rendering + scoring helpers for the context-dependent activity-cliff section.
+
+Ties together three existing pieces for a single curated cliff pair:
+
+- ``mcs_diff_atoms`` (from clustering.cliffs) - which atoms changed between the
+  two molecules, so we can highlight the (small) difference;
+- the classical fingerprints - to score how *similar* each one thinks the pair
+  is;
+- the pair's two endpoint pKi values - to contrast "the fingerprint's guess"
+  against reality on each target.
+
+The point the section makes: a fingerprint sees only structure, so it assigns
+one similarity to the pair. That single number is simultaneously right for the
+endpoint where the pair is flat and wrong for the endpoint where it's a cliff.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from rdkit import Chem
+from rdkit.Chem.Draw import rdMolDraw2D
+
+from fingerprints.clustering.cliffs import mcs_diff_atoms
+from fingerprints.data.context_cliffs import ContextCliff
+from fingerprints.fingerprint_methods.rdkit_fps import all_classical
+from fingerprints.fingerprint_methods.similarity import pairwise_similarity
+
+
+# Reuse the same short id -> display label the rest of the repo uses.
+FP_LABELS: dict[str, str] = {
+    "morgan": "Morgan",
+    "rdkit_topo": "RDKit topological",
+    "atom_pair": "Atom pair",
+    "top_torsion": "Topological torsion",
+    "maccs": "MACCS",
+    "avalon": "Avalon",
+}
+FP_DISPLAY_ORDER: tuple[str, ...] = (
+    "morgan", "maccs", "atom_pair", "top_torsion", "rdkit_topo", "avalon",
+)
+
+_CHANGE_COLOR = (0.95, 0.45, 0.15)  # orange for the atoms that differ
+
+
+def pair_mols(cliff: ContextCliff) -> tuple[Chem.Mol, Chem.Mol]:
+    return Chem.MolFromSmiles(cliff.smiles_1), Chem.MolFromSmiles(cliff.smiles_2)
+
+
+def changed_atoms(cliff: ContextCliff) -> tuple[list[int], list[int]]:
+    """Atoms in (mol1, mol2) that are NOT part of the shared MCS core."""
+    m1, m2 = pair_mols(cliff)
+    diff = mcs_diff_atoms(m1, m2)
+    if diff is None:
+        return [], []
+    return diff[0], diff[1]
+
+
+def _draw(mol: Chem.Mol, highlight: list[int], width: int, height: int) -> str:
+    drawer = rdMolDraw2D.MolDraw2DSVG(width, height)
+    drawer.drawOptions().addStereoAnnotation = False
+    colors = {a: _CHANGE_COLOR for a in highlight}
+    rdMolDraw2D.PrepareAndDrawMolecule(
+        drawer, mol, highlightAtoms=highlight, highlightAtomColors=colors
+    )
+    drawer.FinishDrawing()
+    return drawer.GetDrawingText()
+
+
+def pair_svgs(
+    cliff: ContextCliff, *, width: int = 340, height: int = 260
+) -> tuple[str, str]:
+    """Both molecules drawn side by side with the changed atoms highlighted."""
+    m1, m2 = pair_mols(cliff)
+    diff1, diff2 = changed_atoms(cliff)
+    return _draw(m1, diff1, width, height), _draw(m2, diff2, width, height)
+
+
+@dataclass(frozen=True)
+class FPScore:
+    key: str
+    label: str
+    similarity: float
+
+
+def fingerprint_scores(cliff: ContextCliff) -> list[FPScore]:
+    """How similar does each classical fingerprint think this pair is?"""
+    m1, m2 = pair_mols(cliff)
+    fps = all_classical([m1, m2])
+    out: list[FPScore] = []
+    for key in FP_DISPLAY_ORDER:
+        sim = float(pairwise_similarity(fps[key])[0, 1])
+        out.append(FPScore(key=key, label=FP_LABELS[key], similarity=sim))
+    return out
+
+
+def fold_change(delta_pki: float) -> str:
+    """Turn a |ΔpKi| into a readable potency-fold string, e.g. '≈250×'."""
+    fold = 10.0 ** delta_pki
+    if fold < 10:
+        return f"{fold:.1f}×"
+    if fold < 1000:
+        return f"≈{round(fold, -1):.0f}×"
+    return f"≈{fold:,.0f}×"

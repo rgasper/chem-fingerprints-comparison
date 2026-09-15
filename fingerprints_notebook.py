@@ -8,8 +8,11 @@ app = marimo.App(width="medium")
 def _():
     import altair as alt
     import marimo as mo
+    import pandas as pd
 
-    return alt, mo
+    from fingerprints import cliff_view as cv
+
+    return alt, cv, mo, pd
 
 
 @app.cell
@@ -453,22 +456,24 @@ def _(collision_slider, current_mol, me, mo, mol_valid, short_collisions):
 
 
 @app.cell
-def _(alt, current_mol, me, mo, mol_valid):
+def _(alt, current_mol, me, mo, mol_valid, pd):
     # Collision rate as the vector lengthens: the payoff of a longer fingerprint.
     if mol_valid:
         _curve = me.collision_curve(current_mol)
         _distinct = _curve[0].distinct_envs
-        _rows = [
+        _df = pd.DataFrame(
             {
-                "length": cp.n_bits,
-                "rate": round(100 * cp.collisions / cp.distinct_envs, 1)
-                if cp.distinct_envs
-                else 0.0,
+                "length": [cp.n_bits for cp in _curve],
+                "rate": [
+                    round(100 * cp.collisions / cp.distinct_envs, 1)
+                    if cp.distinct_envs
+                    else 0.0
+                    for cp in _curve
+                ],
             }
-            for cp in _curve
-        ]
+        )
         _chart = (
-            alt.Chart(alt.Data(values=_rows))
+            alt.Chart(_df)
             .mark_line(point=True, color="#e8590c")
             .encode(
                 x=alt.X(
@@ -490,7 +495,7 @@ def _(alt, current_mol, me, mo, mol_valid):
         )
         _view = mo.vstack(
             [
-                mo.ui.altair_chart(_chart),
+                mo.as_html(_chart),
                 mo.md(
                     f"This molecule has **{_distinct} distinct atom environments**. "
                     "The rate falls off fast — which is why **2048 bits** is a common "
@@ -625,9 +630,174 @@ def _(mo):
     mo.md(r"""
     ---
 
-    *Next sections (Morgan atom-environment explorer, similarity playground,
-    ADMET applications, and activity-cliff limitations) are under construction.
-    The custom anywidget bit-explorer upgrade lands here.*
+    ## 4 · Where fingerprints break: activity cliffs
+
+    Everything so far rests on one assumption: **similar structure → similar
+    behavior**. That's why fingerprints work for search and cheap property
+    models. **Activity cliffs** are the pairs where it fails — a tiny structural
+    change causing a huge change in potency.
+
+    Here's the twist that makes them genuinely hard: a cliff is **not a property
+    of the molecule pair alone — it depends on the endpoint you ask about.** The
+    same one-atom swap can be a 100× cliff for one target and completely flat for
+    a closely related one. A fingerprint sees only structure, so it assigns *one*
+    similarity to the pair — and that single number is right for the endpoint
+    where the pair is flat and badly wrong for the endpoint where it's a cliff.
+
+    Pick a target pair and a molecule pair below and see it happen. (These pairs
+    are curated from the [MoleculeACE](https://github.com/molML/MoleculeACE)
+    benchmark — each is a real medicinal-chemistry change, hand-checked so
+    there are no tautomer or assay-artifact traps.)
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    from fingerprints.data import context_cliffs as ctx
+
+    target_pair_choice = mo.ui.dropdown(
+        options={
+            f"{tp.target_a} vs {tp.target_b}": tp.key for tp in ctx.TARGET_PAIRS
+        },
+        value=f"{ctx.TARGET_PAIRS[0].target_a} vs {ctx.TARGET_PAIRS[0].target_b}",
+        label="Target pair",
+    )
+    return ctx, target_pair_choice
+
+
+@app.cell
+def _(ctx, mo, target_pair_choice):
+    _tp = ctx.by_key()[target_pair_choice.value]
+    # Label each curated pair by its plain-English change + which target it's a
+    # cliff on, so the dropdown itself previews the story.
+    _opts = {}
+    for _i, _c in enumerate(_tp.cliffs):
+        _opts[f"{_c.change}  —  cliff on {_c.cliff_on}"] = _i
+    cliff_choice = mo.ui.dropdown(
+        options=_opts, value=next(iter(_opts)), label="Molecule pair"
+    )
+    mo.vstack([mo.md(f"*{_tp.blurb}*"), mo.hstack([target_pair_choice, cliff_choice], justify="start", gap=2)])
+    return (cliff_choice,)
+
+
+@app.cell
+def _(cliff_choice, ctx, cv, mo, target_pair_choice):
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _pair = _tp.cliffs[cliff_choice.value]
+    _svg1, _svg2 = cv.pair_svgs(_pair, width=320, height=240)
+
+    # Structures with the changed atoms highlighted in orange.
+    _structures = mo.hstack(
+        [
+            mo.vstack([mo.Html(_svg1)], align="center"),
+            mo.md("## →"),
+            mo.vstack([mo.Html(_svg2)], align="center"),
+        ],
+        justify="center",
+        gap=1,
+    )
+    _change = mo.md(
+        f"**The change:** {_pair.change}.  \nThe orange atoms are all that differ "
+        "between these two molecules."
+    ).callout(kind="neutral")
+
+    # Dual-endpoint activity readout: cliff on one, flat on the other.
+    def _endpoint_card(target, pki1, pki2):
+        delta = abs(pki1 - pki2)
+        is_cliff = target == _pair.cliff_on
+        fold = cv.fold_change(delta)
+        kind = "danger" if is_cliff else "success"
+        verdict = f"**{fold} potency change** — a cliff!" if is_cliff else (
+            f"**{fold} — essentially unchanged** (flat)"
+        )
+        return mo.md(
+            f"#### {target}\n\n"
+            f"pKi: **{pki1}** → **{pki2}**  \n{verdict}"
+        ).callout(kind=kind)
+
+    _endpoints = mo.hstack(
+        [
+            _endpoint_card(_pair.target_a, _pair.pki_1_a, _pair.pki_2_a),
+            _endpoint_card(_pair.target_b, _pair.pki_1_b, _pair.pki_2_b),
+        ],
+        widths=[1, 1],
+        gap=2,
+    )
+    mo.vstack([_structures, _change, _endpoints])
+    return
+
+
+@app.cell
+def _(alt, cliff_choice, ctx, cv, mo, pd, target_pair_choice):
+    # The reveal: every fingerprint scores this pair as fairly similar - one
+    # number, blind to which endpoint it's being applied to.
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _pair = _tp.cliffs[cliff_choice.value]
+    _scores = cv.fingerprint_scores(_pair)
+    _df = pd.DataFrame(
+        {
+            "fingerprint": [s.label for s in _scores],
+            "similarity": [round(s.similarity, 3) for s in _scores],
+        }
+    )
+    _chart = (
+        alt.Chart(_df)
+        .mark_bar(cornerRadius=3, color="#4c6ef5")
+        .encode(
+            x=alt.X(
+                "similarity:Q",
+                title="fingerprint similarity",
+                scale=alt.Scale(domain=[0, 1]),
+            ),
+            y=alt.Y("fingerprint:N", sort="-x"),
+            tooltip=[alt.Tooltip("fingerprint:N"), alt.Tooltip("similarity:Q")],
+        )
+        .properties(height=220)
+    )
+    _lo = min(s.similarity for s in _scores)
+    _hi = max(s.similarity for s in _scores)
+    _punchline = mo.md(
+        f"Every fingerprint calls this pair **similar** (similarity "
+        f"{_lo:.2f}–{_hi:.2f}) — they only see the small structural change. "
+        f"That verdict is **right for {_pair.flat_on}** (where the pair really is "
+        f"flat) and **badly wrong for {_pair.cliff_on}** (where it's a cliff). "
+        "One structural similarity, two opposite biological realities — the "
+        "fingerprint cannot tell which target you mean."
+    ).callout(kind="warn")
+    mo.vstack(
+        [
+            mo.md("**How similar each fingerprint thinks this pair is:**"),
+            mo.as_html(_chart),
+            _punchline,
+        ]
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    **Why this is the hard case.** A cliff isn't noise — these are real,
+    reproducible measurements. It's that the property surface is genuinely
+    *rugged* in a way a structure-only representation can't anticipate, and
+    *differently* rugged for every target. (As a sanity check: two targets with
+    near-identical binding sites — JAK1 and JAK2 — share hundreds of molecules
+    but yield **zero** context-dependent cliffs in this benchmark. Cliffs only
+    appear where the biology actually diverges.)
+
+    So what can learn the difference? The next sections bring in **neural
+    fingerprints** — first a pretrained foundation model, then a small network we
+    train on these very endpoints — to ask whether a representation *learned from
+    activity data* can do what a fixed structural one can't.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ---
 
     ### About this notebook
 

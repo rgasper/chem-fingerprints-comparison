@@ -32,6 +32,8 @@ dependencies = [
     "hdbscan>=0.8",
     "marimo>=0.24.0",
     "altair>=6.2.2",
+    "pandas>=3.0.3",
+    "pyarrow>=25.0.1",
 ]
 
 [dependency-groups]
