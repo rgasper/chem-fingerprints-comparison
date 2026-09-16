@@ -508,7 +508,22 @@ def _(ap_slider, ce, current_mol, mo, mol_valid, topo_slider, tt_slider):
             ce.FP_INFO["top_torsion"].label: _fp_tab("top_torsion", tt_slider),
         }
     )
-    tabbed_fps
+    mo.accordion(
+        {
+            "🧰 Aside: the rest of the RDKit toolbox (topological, atom-pair, torsion)": mo.vstack(
+                [
+                    mo.md(
+                        "Beyond MACCS's checklist and Morgan's circular environments, "
+                        "RDKit ships several more classical fingerprints. They each "
+                        "encode a different notion of structure — paths, atom pairs at "
+                        "a distance, torsions — but share Morgan's hashing machinery. "
+                        "Worth knowing they exist; not central to the story."
+                    ),
+                    tabbed_fps,
+                ]
+            )
+        }
+    )
     return
 
 
