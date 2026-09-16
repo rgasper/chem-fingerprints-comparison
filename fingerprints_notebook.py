@@ -1013,8 +1013,15 @@ def _(alpha_knob, alt, cliff_choice, ctx, mo, pd, target_pair_choice):
                 ).callout(kind="info")
 
             # SMILES of the two molecules in the currently-picked cliff, so we can
-            # spotlight them among all the faded background molecules.
-            _cl = _tp.cliffs[cliff_choice.value] if cliff_choice.value < len(_tp.cliffs) else None
+            # spotlight them among all the faded background molecules. Only do this
+            # when the grid we loaded matches the picked pair (otherwise the cliff
+            # SMILES won't be among this grid's molecules).
+            _tp = ctx.by_key()[target_pair_choice.value]
+            _cl = (
+                _tp.cliffs[cliff_choice.value]
+                if _pair == _sel and cliff_choice.value < len(_tp.cliffs)
+                else None
+            )
             _hi_map = {}
             if _cl is not None:
                 _c1, _c2 = _canon(_cl.smiles_1), _canon(_cl.smiles_2)
