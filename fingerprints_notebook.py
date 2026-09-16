@@ -788,13 +788,29 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
         _view = mo.md("")
     else:
         _poses = pv2.load_all(_tp.key, _idx)
+        _cliff = _tp.cliffs[_idx]
+
+        def _potency_word(pki):
+            if pki >= 9.0:
+                return "very potent"
+            if pki >= 7.5:
+                return "potent"
+            if pki >= 6.0:
+                return "moderate"
+            return "weak"
+
         _keys = [
             f"mol1_{_tp.target_a}", f"mol2_{_tp.target_a}",
             f"mol1_{_tp.target_b}", f"mol2_{_tp.target_b}",
         ]
+        _col_pki = [_cliff.pki_1_a, _cliff.pki_2_a, _cliff.pki_1_b, _cliff.pki_2_b]
         _col_labels = [
             f"mol 1 · {_tp.target_a}", f"mol 2 · {_tp.target_a}",
             f"mol 1 · {_tp.target_b}", f"mol 2 · {_tp.target_b}",
+        ]
+        _col_labels = [
+            f"{_lab}  —  {_potency_word(_p)} (pKi {_p})"
+            for _lab, _p in zip(_col_labels, _col_pki)
         ]
         _bits, _fps = pv2.aligned_interaction_fingerprints(_poses, _keys)
         _type_label = dict(pv2.INTERACTION_TYPES)
