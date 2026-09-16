@@ -916,39 +916,71 @@ def _(alpha_knob, alt, ctx, mo, pd, target_pair_choice):
             else f"  \n*(showing {_ta} vs {_tb} — the picked pair isn't trained yet)*"
         )
 
-        # Two big R2 readouts for the current alpha. alpha weights the FIRST
-        # endpoint (task A); 1-alpha the second.
-        def _card(target, r2):
-            _kind = "success" if r2 > 0.3 else ("danger" if r2 < 0.1 else "neutral")
-            _verdict = "learns it" if r2 > 0.3 else (
-                "fails" if r2 < 0.1 else "partial"
+        # RMSE per endpoint for a grid row. Prefer the cached mean-over-seeds;
+        # if an older cache lacks it, fall back to computing from the seed-0
+        # scatter so the notebook never KeyErrors while the grid is regenerating.
+        def _rmse_of(row, key):
+            _mean = row.get(f"rmse_{key}_mean")
+            if _mean is not None:
+                return _mean
+            sc = (row.get("scatter") or {}).get(key)
+            if not sc:
+                return float("nan")
+            import math
+
+            _pairs = [
+                (a, p)
+                for a, p in zip(sc["actual"], sc["pred"])
+                if a is not None and p is not None and a == a and p == p
+            ]
+            if len(_pairs) < 5:
+                return float("nan")
+            return math.sqrt(
+                sum((a - p) ** 2 for a, p in _pairs) / len(_pairs)
+            )
+
+        # Two big RMSE readouts for the current alpha (lower is better, pKi
+        # units). alpha weights the FIRST endpoint (task A); 1-alpha the second.
+        def _card(target, rmse):
+            if rmse != rmse:  # NaN
+                return mo.md(f"#### {target}\n\ntest RMSE = **n/a**").callout(
+                    kind="neutral"
+                )
+            _kind = "success" if rmse < 0.8 else ("danger" if rmse > 1.2 else "neutral")
+            _verdict = "learns it" if rmse < 0.8 else (
+                "fails" if rmse > 1.2 else "partial"
             )
             return mo.md(
-                f"#### {target}\n\ntest R² = **{r2:.2f}** — {_verdict}"
+                f"#### {target}\n\ntest RMSE = **{rmse:.2f}** pKi — {_verdict}"
             ).callout(kind=_kind)
 
         _readout = mo.hstack(
             [
-                _card(f"{_ta}  (α = {alpha_knob.value})", _cur["r2_a_mean"]),
-                _card(f"{_tb}  (1−α = {round(1 - alpha_knob.value, 2)})", _cur["r2_b_mean"]),
+                _card(f"{_ta}  (α = {alpha_knob.value})", _rmse_of(_cur, "a")),
+                _card(f"{_tb}  (1−α = {round(1 - alpha_knob.value, 2)})", _rmse_of(_cur, "b")),
             ],
             widths=[1, 1],
             gap=2,
         )
 
-        # Trade-off curve: R2 on each endpoint across the whole alpha grid,
-        # with the current alpha marked.
+        # Trade-off curve: RMSE on each endpoint across the whole alpha grid,
+        # with the current alpha marked. Lower is better.
         _rows = []
         for r in _g["results"]:
-            _rows.append({"alpha": r["alpha"], "R2": r["r2_a_mean"], "endpoint": _ta})
-            _rows.append({"alpha": r["alpha"], "R2": r["r2_b_mean"], "endpoint": _tb})
-        _df = pd.DataFrame(_rows)
+            _rows.append({"alpha": r["alpha"], "RMSE": _rmse_of(r, "a"), "endpoint": _ta})
+            _rows.append({"alpha": r["alpha"], "RMSE": _rmse_of(r, "b"), "endpoint": _tb})
+        _df = pd.DataFrame(_rows).dropna()
+        _ymax = float(_df["RMSE"].max()) * 1.1 if not _df.empty else 2.0
         _line = (
             alt.Chart(_df)
             .mark_line(point=True)
             .encode(
                 x=alt.X("alpha:Q", title="α (loss weight toward the first endpoint)"),
-                y=alt.Y("R2:Q", title="test R²", scale=alt.Scale(domain=[-0.1, 0.6])),
+                y=alt.Y(
+                    "RMSE:Q",
+                    title="test RMSE (pKi) — lower is better",
+                    scale=alt.Scale(domain=[0, _ymax]),
+                ),
                 color=alt.Color("endpoint:N", title=None),
             )
             .properties(height=240, width=440)
@@ -1016,7 +1048,7 @@ def _(alpha_knob, alt, ctx, mo, pd, target_pair_choice):
             "<span style='color:#e03131'>**red cliff molecules**</span> are the "
             "ones a similarity-based view can't see coming. Watch them scatter "
             "*off* the line — especially on the endpoint α is starving — while the "
-            "overall R² still looks respectable. The aggregate score hides the "
+            "overall RMSE still looks respectable. The aggregate score hides the "
             "failure that matters most."
         )
         _view = mo.vstack(

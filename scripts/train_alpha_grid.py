@@ -47,11 +47,14 @@ def run_pair(pair_key: str) -> None:
     summary: list[dict] = []
     for alpha in ALPHAS:
         r2_a, r2_b = [], []
+        rmse_a, rmse_b = [], []
         scatter = None
         for seed in SEEDS:
             res = train_dmpnn(ed, alpha=alpha, epochs=EPOCHS, seed=seed)
             r2_a.append(res.r2_a)
             r2_b.append(res.r2_b)
+            rmse_a.append(res.rmse_a)
+            rmse_b.append(res.rmse_b)
             if seed == 0:
                 # Per-test-molecule predicted/actual/cliff for the scatter, for
                 # each endpoint. Round to keep the JSON compact.
@@ -69,7 +72,8 @@ def run_pair(pair_key: str) -> None:
                 }
             logger.info(
                 f"  alpha={alpha} seed={seed}: "
-                f"R2_a={res.r2_a:.3f} R2_b={res.r2_b:.3f}"
+                f"R2_a={res.r2_a:.3f} R2_b={res.r2_b:.3f} "
+                f"RMSE_a={res.rmse_a:.3f} RMSE_b={res.rmse_b:.3f}"
             )
         summary.append(
             {
@@ -78,6 +82,10 @@ def run_pair(pair_key: str) -> None:
                 "r2_a_std": float(np.nanstd(r2_a)),
                 "r2_b_mean": float(np.nanmean(r2_b)),
                 "r2_b_std": float(np.nanstd(r2_b)),
+                "rmse_a_mean": float(np.nanmean(rmse_a)),
+                "rmse_a_std": float(np.nanstd(rmse_a)),
+                "rmse_b_mean": float(np.nanmean(rmse_b)),
+                "rmse_b_std": float(np.nanstd(rmse_b)),
                 "scatter": scatter,
             }
         )

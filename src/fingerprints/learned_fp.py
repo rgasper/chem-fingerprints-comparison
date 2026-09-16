@@ -135,6 +135,8 @@ class TrainResult:
     alpha: float
     r2_a: float  # test R^2 on endpoint A
     r2_b: float  # test R^2 on endpoint B
+    rmse_a: float  # test RMSE on endpoint A (pKi units)
+    rmse_b: float  # test RMSE on endpoint B (pKi units)
     embedding: np.ndarray  # (n, d) learned fingerprint for all molecules
     smiles: list[str]
     # Per-TEST-molecule predicted/actual/cliff for the scatter, per endpoint.
@@ -212,10 +214,21 @@ def train_dmpnn(
         ss_tot = float(np.sum((yt - yt.mean()) ** 2))
         return 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
+    def _rmse(col: int) -> float:
+        yt = ed.y[test_idx, col]
+        yp = preds[test_idx, col]
+        mask = ~np.isnan(yt)
+        if mask.sum() < 5:
+            return float("nan")
+        yt, yp = yt[mask], yp[mask]
+        return float(np.sqrt(np.mean((yt - yp) ** 2)))
+
     return TrainResult(
         alpha=alpha,
         r2_a=_r2(0),
         r2_b=_r2(1),
+        rmse_a=_rmse(0),
+        rmse_b=_rmse(1),
         embedding=emb,
         smiles=list(ed.smiles),
         test_actual=ed.y[test_idx],

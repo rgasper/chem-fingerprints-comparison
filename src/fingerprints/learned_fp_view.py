@@ -1,9 +1,10 @@
 """Read the cached learned-fingerprint alpha-grid results for the notebook.
 
 ``scripts/train_alpha_grid.py`` trains the D-MPNN across a grid of loss weights
-(alpha) offline and caches, per alpha: test R^2 on both endpoints (mean/std over
-seeds) and a 2D PCA of the learned fingerprint. This module just loads that
-JSON, so the notebook stays light (no torch/chemprop import) and instant.
+(alpha) offline and caches, per alpha: test R^2 and RMSE on both endpoints
+(mean/std over seeds) plus per-test-molecule predicted/actual/cliff for the
+scatter. This module just loads that JSON, so the notebook stays light (no
+torch/chemprop import) and instant.
 """
 
 from __future__ import annotations
