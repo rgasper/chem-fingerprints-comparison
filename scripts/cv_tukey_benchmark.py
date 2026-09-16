@@ -39,9 +39,12 @@ RDLogger.DisableLog("rdApp.*")
 
 CACHE = Path(".cache/molace")
 OUT_DIR = Path("data/benchmark")
-N_REPEATS = 5
+# 3x5-fold scaffold CV = 15 held-out RMSE values per method: enough for a
+# stable ANOVA/Tukey while staying tractable on a laptop MPS (~2h). Bump to
+# 5 repeats for a publication-grade run on a bigger box.
+N_REPEATS = 3
 N_FOLDS = 5
-DMPNN_EPOCHS = 30
+DMPNN_EPOCHS = 20
 RF_TREES = 300
 
 # Single endpoints: (label, molace dataset).
@@ -234,9 +237,10 @@ def run_endpoint(label, dataset):
 def summarize(results):
     lines = ["# CV + Tukey benchmark: learned vs. fixed fingerprints", ""]
     lines.append(
-        f"{N_REPEATS}x{N_FOLDS}-fold scaffold CV, RMSE in pKi units "
-        f"(lower is better). D-MPNN trained {DMPNN_EPOCHS} epochs on MPS; "
-        f"fixed FPs fed to a {RF_TREES}-tree RandomForest."
+        f"{N_REPEATS}x{N_FOLDS}-fold scaffold CV ({N_REPEATS * N_FOLDS} held-out "
+        f"evaluations per method), RMSE in pKi units (lower is better). D-MPNN "
+        f"trained {DMPNN_EPOCHS} epochs on Apple MPS; fixed FPs fed to a "
+        f"{RF_TREES}-tree RandomForest."
     )
     lines.append("")
     for r in results:
