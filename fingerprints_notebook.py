@@ -888,7 +888,7 @@ def _(mo):
 
 
 @app.cell
-def _(alpha_knob, alt, ctx, mo, pd, target_pair_choice):
+def _(alpha_knob, alt, cliff_choice, ctx, mo, pd, target_pair_choice):
     from fingerprints import learned_fp_view as lfv
 
     # Follow the target-pair picker from Section 4; fall back to any trained grid
@@ -992,64 +992,116 @@ def _(alpha_knob, alt, ctx, mo, pd, target_pair_choice):
         )
         _tradeoff = mo.as_html(_line + _rule)
 
-        # Predicted-vs-actual scatter per endpoint, cliff molecules in red.
-        # This is where the aggregate R2 hides the real story: the model can look
-        # decent overall yet miss the cliff molecules specifically.
-        def _scatter(endpoint_key, target):
-            sc = _cur.get("scatter")
-            if not sc or endpoint_key not in sc:
-                return mo.md(f"*No per-molecule data cached for {target}.*")
-            s = sc[endpoint_key]
-            _pts = pd.DataFrame(
-                {
-                    "actual": s["actual"],
-                    "pred": s["pred"],
-                    "kind": ["on a cliff" if c else "not a cliff" for c in s["cliff"]],
-                }
-            ).dropna()
+        # Endpoint-vs-endpoint view: plot endpoint A pKi (x) against endpoint B
+        # pKi (y). Each molecule shows a MEASURED mark (filled circle) and a
+        # PREDICTED mark (hollow diamond) joined by a line; the picked cliff pair
+        # is highlighted while everything else fades back. This makes the cliff
+        # tangible: two molecules that sit almost on top of each other in one
+        # axis but far apart in the other — and whether the model can follow.
+        from rdkit import Chem as _Chem
+
+        def _canon(smi):
+            _m = _Chem.MolFromSmiles(smi)
+            return _Chem.MolToSmiles(_m) if _m else None
+
+        def _endpoint_vs_endpoint():
+            sc = _cur.get("scatter") or {}
+            if "smiles" not in sc:
+                return mo.md(
+                    "*Per-molecule endpoint–endpoint data isn't in this cache yet — "
+                    "re-run `scripts/train_alpha_grid.py`.*"
+                ).callout(kind="info")
+
+            # SMILES of the two molecules in the currently-picked cliff, so we can
+            # spotlight them among all the faded background molecules.
+            _cl = _tp.cliffs[cliff_choice.value] if cliff_choice.value < len(_tp.cliffs) else None
+            _hi_map = {}
+            if _cl is not None:
+                _c1, _c2 = _canon(_cl.smiles_1), _canon(_cl.smiles_2)
+                if _c1:
+                    _hi_map[_c1] = "molecule 1"
+                if _c2:
+                    _hi_map[_c2] = "molecule 2"
+
+            _rows = []
+            for _i, _smi in enumerate(sc["smiles"]):
+                _cs = _canon(_smi)
+                _grp = _hi_map.get(_cs, "other molecules")
+                _aa, _ab = sc["actual_a"][_i], sc["actual_b"][_i]
+                _pa, _pb = sc["pred_a"][_i], sc["pred_b"][_i]
+                # Measured mark only if BOTH endpoints are labeled.
+                if _aa is not None and _ab is not None and _aa == _aa and _ab == _ab:
+                    _rows.append({"x": _aa, "y": _ab, "src": "measured", "grp": _grp})
+                if _pa is not None and _pb is not None and _pa == _pa and _pb == _pb:
+                    _rows.append({"x": _pa, "y": _pb, "src": "predicted", "grp": _grp})
+            _pts = pd.DataFrame(_rows)
             if _pts.empty:
-                return mo.md(f"*{target}: no test molecules with a label.*")
-            _lo = float(min(_pts["actual"].min(), _pts["pred"].min())) - 0.3
-            _hi = float(max(_pts["actual"].max(), _pts["pred"].max())) + 0.3
-            _diag = (
-                alt.Chart(pd.DataFrame({"x": [_lo, _hi], "y": [_lo, _hi]}))
-                .mark_line(color="#adb5bd", strokeDash=[4, 4])
-                .encode(x="x:Q", y="y:Q")
+                return mo.md("*No molecules with labels to plot.*")
+
+            _bg = _pts[_pts["grp"] == "other molecules"]
+            _fg = _pts[_pts["grp"] != "other molecules"]
+
+            _base = alt.Chart(_bg)
+            _x = alt.X(f"x:Q", title=f"{_ta} pKi")
+            _y = alt.Y(f"y:Q", title=f"{_tb} pKi")
+            _shape = alt.Shape(
+                "src:N",
+                title=None,
+                scale=alt.Scale(
+                    domain=["measured", "predicted"], range=["circle", "diamond"]
+                ),
             )
-            _sc = (
-                alt.Chart(_pts)
-                .mark_circle(size=45, opacity=0.6)
-                .encode(
-                    x=alt.X("actual:Q", title="measured pKi", scale=alt.Scale(domain=[_lo, _hi])),
-                    y=alt.Y("pred:Q", title="predicted pKi", scale=alt.Scale(domain=[_lo, _hi])),
-                    color=alt.Color(
-                        "kind:N",
-                        title=None,
-                        scale=alt.Scale(
-                            domain=["on a cliff", "not a cliff"],
-                            range=["#e03131", "#adb5bd"],
-                        ),
+            # Faded background cloud.
+            _cloud = _base.mark_point(opacity=0.12, size=35, color="#868e96").encode(
+                x=_x, y=_y, shape=_shape
+            )
+            _layers = [_cloud]
+            if not _fg.empty:
+                _color = alt.Color(
+                    "grp:N",
+                    title=None,
+                    scale=alt.Scale(
+                        domain=["molecule 1", "molecule 2"],
+                        range=["#1c7ed6", "#e8590c"],
                     ),
-                    tooltip=["actual:Q", "pred:Q", "kind:N"],
                 )
-            )
-            return mo.vstack(
-                [
-                    mo.md(f"**{target}** — predicted vs. measured (test set)"),
-                    mo.as_html((_diag + _sc).properties(height=300, width=300)),
-                ]
+                # A line linking each highlighted molecule's measured->predicted
+                # marks, to show how far the model's guess drifts.
+                _link = (
+                    alt.Chart(_fg)
+                    .mark_line(opacity=0.5)
+                    .encode(x=_x, y=_y, color=_color, detail="grp:N")
+                )
+                _marks = (
+                    alt.Chart(_fg)
+                    .mark_point(size=170, filled=False, strokeWidth=2.5)
+                    .encode(
+                        x=_x,
+                        y=_y,
+                        shape=_shape,
+                        color=_color,
+                        tooltip=["grp:N", "src:N", "x:Q", "y:Q"],
+                    )
+                )
+                _layers += [_link, _marks]
+            return mo.as_html(
+                alt.layer(*_layers).properties(height=380, width=440)
             )
 
-        _scatters = mo.hstack(
-            [_scatter("a", _ta), _scatter("b", _tb)], widths=[1, 1], gap=2
-        )
+        _scatters = _endpoint_vs_endpoint()
         _caption = mo.md(
-            "Points on the dashed line are perfect predictions; the "
-            "<span style='color:#e03131'>**red cliff molecules**</span> are the "
-            "ones a similarity-based view can't see coming. Watch them scatter "
-            "*off* the line — especially on the endpoint α is starving — while the "
-            "overall RMSE still looks respectable. The aggregate score hides the "
-            "failure that matters most."
+            f"The whole plot is the two-endpoint space: **{_ta} pKi** across, "
+            f"**{_tb} pKi** up. Each molecule appears as **● measured** and "
+            f"**◇ predicted**, joined by a line. The "
+            f"<span style='color:#1c7ed6'>**molecule 1**</span> / "
+            f"<span style='color:#e8590c'>**molecule 2**</span> marks are the cliff "
+            f"pair you picked above — near-identical structures that sit far apart on "
+            f"one axis. The gap between a molecule's ● and ◇ is how far the learned "
+            f"fingerprint's guess drifted from the truth. (Measured marks need both "
+            f"endpoints assayed; the picked cliff molecules usually sit in the "
+            f"model's *training* split — scaffold-splitting keeps their shared "
+            f"scaffold together — so their predictions are optimistic, but their "
+            f"*position* still shows the cliff.)"
         )
         _view = mo.vstack(
             [

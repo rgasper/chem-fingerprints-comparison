@@ -56,9 +56,24 @@ def run_pair(pair_key: str) -> None:
             rmse_a.append(res.rmse_a)
             rmse_b.append(res.rmse_b)
             if seed == 0:
-                # Per-test-molecule predicted/actual/cliff for the scatter, for
-                # each endpoint. Round to keep the JSON compact.
+                # Full-population rows for the scatter: SMILES + both endpoints'
+                # actual/pred/cliff + split tag, so the notebook can plot one
+                # endpoint against the other and spotlight specific molecules
+                # even when they fall in the train split (as cliff pairs do).
+                def _col(arr, j):
+                    return np.round(arr[:, j], 2).tolist()
+
                 scatter = {
+                    "smiles": list(res.smiles),
+                    "actual_a": _col(res.all_actual, 0),
+                    "actual_b": _col(res.all_actual, 1),
+                    "pred_a": _col(res.all_pred, 0),
+                    "pred_b": _col(res.all_pred, 1),
+                    "cliff_a": res.all_cliff[:, 0].astype(int).tolist(),
+                    "cliff_b": res.all_cliff[:, 1].astype(int).tolist(),
+                    "is_test": res.is_test.astype(int).tolist(),
+                    # Back-compat: keep the test-only per-endpoint shape too, so
+                    # the RMSE fallback still works on either cache generation.
                     "a": {
                         "actual": np.round(res.test_actual[:, 0], 2).tolist(),
                         "pred": np.round(res.test_pred[:, 0], 2).tolist(),

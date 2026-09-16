@@ -143,6 +143,15 @@ class TrainResult:
     test_actual: np.ndarray  # (n_test, 2)
     test_pred: np.ndarray  # (n_test, 2)
     test_cliff: np.ndarray  # (n_test, 2) bool
+    test_smiles: list[str]  # (n_test,) SMILES aligned to the rows above
+    # Full-population arrays (all molecules), aligned to `smiles`, plus a mask
+    # marking which rows were held out for testing. Lets the notebook plot the
+    # whole endpoint-vs-endpoint space and spotlight specific molecules (which,
+    # for scaffold-clustered cliff pairs, usually fall in the train split).
+    all_pred: np.ndarray  # (n, 2)
+    all_actual: np.ndarray  # (n, 2)
+    all_cliff: np.ndarray  # (n, 2) bool
+    is_test: np.ndarray  # (n,) bool
 
 
 def train_dmpnn(
@@ -234,4 +243,11 @@ def train_dmpnn(
         test_actual=ed.y[test_idx],
         test_pred=preds[test_idx],
         test_cliff=ed.cliff[test_idx],
+        test_smiles=[ed.smiles[i] for i in test_idx],
+        all_pred=preds,
+        all_actual=ed.y,
+        all_cliff=ed.cliff,
+        is_test=np.array(
+            [i in set(test_idx) for i in range(len(ed.smiles))], dtype=bool
+        ),
     )
