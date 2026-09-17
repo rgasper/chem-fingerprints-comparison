@@ -1120,6 +1120,141 @@ def _(mo):
     mo.md(r"""
     ---
 
+    ## 🧪 Fingerprint playground: poke the molecule
+
+    Take the molecule you picked at the top, apply one small, real medicinal-
+    chemistry edit, and watch how the fingerprints react. Some edits barely
+    nudge them; some flip a surprising number of bits. **That spread is the
+    whole point** — a fingerprint is a *chosen* notion of similarity, so the
+    same one-atom change lands very differently depending on which fingerprint
+    is looking.
+    """)
+    return
+
+
+@app.cell
+def _(current_mol, mo, mol_valid):
+    from fingerprints import mol_edits as med
+
+    # Offer only edits that produce a valid, distinct product for THIS molecule,
+    # so a user can never click a button that no-ops or errors.
+    _edits = med.applicable_edits(current_mol) if mol_valid else []
+    if _edits:
+        edit_choice = mo.ui.dropdown(
+            options={e.label: e.key for e in _edits},
+            value=_edits[0].label,
+            label="Pick an edit to apply",
+        )
+    else:
+        edit_choice = mo.ui.dropdown(options={"(none)": ""}, value="(none)")
+    applicable = _edits
+    return applicable, edit_choice, med
+
+
+@app.cell
+def _(applicable, current_mol, edit_choice, med, mo, mol_valid):
+    from rdkit.Chem.Draw import rdMolDraw2D as _draw2d
+
+    from fingerprints import chemeleon_fp as _chf
+    from fingerprints.morgan_explorer import on_bits as _on_bits
+
+    def _svg(mol, width=280, height=210):
+        d = _draw2d.MolDraw2DSVG(width, height)
+        d.drawOptions().addStereoAnnotation = False
+        _draw2d.PrepareAndDrawMolecule(d, mol)
+        d.FinishDrawing()
+        return d.GetDrawingText()
+
+    def _cosine(a, b):
+        va, vb = _chf.fingerprint(a), _chf.fingerprint(b)
+        denom = float((va @ va) ** 0.5 * (vb @ vb) ** 0.5)
+        return float(va @ vb) / denom if denom > 0 else 0.0
+
+    def _tanimoto(a, b):
+        sa, sb = set(_on_bits(a)), set(_on_bits(b))
+        if not sa and not sb:
+            return 1.0
+        return len(sa & sb) / len(sa | sb)
+
+    if not mol_valid or not applicable:
+        _view = mo.md(
+            "*Pick a valid molecule at the top with at least one applicable edit "
+            "(single atoms like `C` or `O` have none).*"
+        ).callout(kind="info")
+    else:
+        _key = edit_choice.value
+        _edit = med.EDITS_BY_KEY.get(_key)
+        _product = med.apply_edit(current_mol, _key) if _key else None
+        if _product is None:
+            _view = mo.md("*That edit didn't apply here — pick another.*").callout(
+                kind="info"
+            )
+        else:
+            # How each fingerprint rates before -> after.
+            _tan = _tanimoto(current_mol, _product)
+            _cos = _cosine(current_mol, _product)
+            _before = set(_on_bits(current_mol))
+            _after = set(_on_bits(_product))
+            _turned_on = len(_after - _before)
+            _turned_off = len(_before - _after)
+
+            _structures = mo.hstack(
+                [
+                    mo.vstack(
+                        [mo.md("**before**"), mo.Html(_svg(current_mol))],
+                        align="center",
+                    ),
+                    mo.md("## →"),
+                    mo.vstack(
+                        [mo.md("**after**"), mo.Html(_svg(_product))],
+                        align="center",
+                    ),
+                ],
+                justify="center",
+                gap=1,
+            )
+            _what = mo.md(
+                f"**{_edit.label}.** {_edit.description}"
+            ).callout(kind="neutral")
+
+            _ecfp_card = mo.md(
+                f"#### ECFP (Morgan)\n\n"
+                f"Tanimoto **{_tan:.2f}**  \n"
+                f"{_turned_on} bits switched **on**, {_turned_off} switched **off** "
+                f"(of a 2048-bit vector)."
+            ).callout(kind="warn" if _tan < 0.85 else "success")
+            _chem_card = mo.md(
+                f"#### CheMeleon (learned)\n\n"
+                f"Cosine **{_cos:.2f}**  \n"
+                f"The learned embedding shifts continuously — no discrete bits to "
+                f"count, just a direction change in 2048-D space."
+            ).callout(kind="warn" if _cos < 0.9 else "success")
+
+            _reads = mo.hstack([_ecfp_card, _chem_card], widths=[1, 1], gap=2)
+            _view = mo.vstack(
+                [
+                    _structures,
+                    _what,
+                    _reads,
+                    mo.md(
+                        "Try flipping between edits: a **halogen** or **magic "
+                        "methyl** often barely moves either fingerprint, while an "
+                        "**aza-swap** or **bioisostere** can flip far more ECFP bits "
+                        "even though it's chemically 'small'. Neither number knows "
+                        "whether the change matters *biologically* — the recurring "
+                        "theme of this whole notebook."
+                    ),
+                ]
+            )
+    mo.vstack([edit_choice, _view, mo.md("---")])
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ---
+
     ### About this notebook
 
     **AI use (disclosed per competition guidelines).** This notebook was built in
@@ -1142,9 +1277,9 @@ def _(mo):
     those caches, so it stays instant and deterministic. Fingerprint code and
     analyses live in this repo — see `README.md`.
 
-    **Credits.** RDKit · chemprop (D-MPNN) · Boltz-2 · PLIP · MoleculeACE ·
-    3Dmol.js · Altair · marimo. Thanks to OpenADMET and the marimo team for the
-    competition.
+    **Credits.** RDKit · chemprop (D-MPNN) · CheMeleon · Boltz-2 · PLIP ·
+    MoleculeACE · 3Dmol.js · Altair · marimo. Thanks to OpenADMET and the
+    marimo team for the competition.
     """)
     return
 

@@ -23,6 +23,7 @@ from fingerprints import classical_explorer as ce
 from fingerprints import chemeleon_fp as chf
 from fingerprints import cliff_view as cv
 from fingerprints import gallery as gal
+from fingerprints import mol_edits as medits
 from fingerprints import importance_view as iv
 from fingerprints import maccs_explorer as mx
 from fingerprints import morgan_explorer as me
@@ -114,6 +115,27 @@ def exercise_cliffs():
 
 
 check("section 4 cliffs", exercise_cliffs)
+
+
+# --- Fingerprint playground: mol-edit palette ----------------------------
+def exercise_mol_edits():
+    # Every gallery molecule + adversarial inputs: applicable_edits and
+    # apply_edit must never throw, and every applied edit must yield a valid
+    # molecule (or None).
+    for smi in ALL_SMILES:
+        mol = Chem.MolFromSmiles(smi) if smi else None
+        app = medits.applicable_edits(mol)
+        for e in app:
+            prod = medits.apply_edit(mol, e.key)
+            assert prod is not None, "applicable edit %s returned None" % e.key
+            assert prod.GetNumAtoms() > 0
+        # every edit key against every mol (including invalid) must not throw
+        for e in medits.all_edits():
+            medits.apply_edit(mol, e.key)
+        medits.apply_edit(mol, "nonexistent_key")
+
+
+check("fingerprint playground mol-edits", exercise_mol_edits)
 
 
 # --- Section 4b: poses + interaction fingerprints ------------------------
