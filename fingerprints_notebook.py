@@ -118,7 +118,6 @@ def _(mo, mol_valid, mx):
         )
     else:
         bit_slider = mo.ui.slider(start=0, stop=0, value=0, label="(no molecule)")
-    bit_slider
     return bit_slider, scrub_bits
 
 
@@ -216,10 +215,14 @@ def _(bit_slider, current_mol, mo, mol_valid, mx, scrub_bits):
                 mo.md("**Where this bit sits in the whole 166-bit fingerprint:**"),
                 mo.Html(_strip),
                 _strip_legend,
+                bit_slider,
+                mo.md("---"),
             ]
         )
     else:
-        _view = mo.md("*Select a valid molecule to explore its MACCS bits.*")
+        _view = mo.vstack(
+            [mo.md("*Select a valid molecule to explore its MACCS bits.*"), mo.md("---")]
+        )
     _view
     return
 
@@ -245,7 +248,6 @@ def _(current_mol, mo, mol_valid):
         )
     else:
         morgan_slider = mo.ui.slider(start=0, stop=0, value=0, label="(no molecule)")
-    morgan_slider
     return me, morgan_on_bits, morgan_slider
 
 
@@ -301,10 +303,11 @@ def _(current_mol, me, mo, mol_valid, morgan_on_bits, morgan_slider):
             "scrubber skips straight between the on bits."
         )
         _view = mo.vstack(
-            [mo.md("**The whole 2048-bit fingerprint:**"), mo.Html(_strip), _legend, _note]
+            [mo.md("**The whole 2048-bit fingerprint:**"), mo.Html(_strip), _legend, _note,
+             morgan_slider, mo.md("---")]
         )
     else:
-        _view = mo.md("")
+        _view = mo.md("---")
     _view
     return
 
@@ -424,24 +427,29 @@ def _(alt, current_mol, me, mo, mol_valid, pd):
 
 @app.cell
 def _(collision_card, collision_curve_view, collision_slider, mo):
-    mo.accordion(
-        {
-            "🔍 Aside: why is a Morgan fingerprint 2048 bits long? (hash collisions)": mo.vstack(
-                [
-                    mo.md(
-                        "Morgan has *no* fixed vocabulary, so it can't reserve a slot "
-                        "per feature the way MACCS does — it **hashes** each atom "
-                        "environment into one of *N* bits. Make *N* too small and "
-                        "different substructures collide onto the same bit. Squeeze it "
-                        "down to just **8 bits** and watch distinct environments pile "
-                        "up on one slot:"
-                    ),
-                    collision_slider,
-                    collision_card,
-                    collision_curve_view,
-                ]
-            )
-        }
+    mo.vstack(
+        [
+            mo.accordion(
+                {
+                    "🔍 Aside: why is a Morgan fingerprint 2048 bits long? (hash collisions)": mo.vstack(
+                        [
+                            mo.md(
+                                "Morgan has *no* fixed vocabulary, so it can't reserve a slot "
+                                "per feature the way MACCS does — it **hashes** each atom "
+                                "environment into one of *N* bits. Make *N* too small and "
+                                "different substructures collide onto the same bit. Squeeze it "
+                                "down to just **8 bits** and watch distinct environments pile "
+                                "up on one slot:"
+                            ),
+                            collision_card,
+                            collision_curve_view,
+                            collision_slider,
+                        ]
+                    )
+                }
+            ),
+            mo.md("---"),
+        ]
     )
     return
 
@@ -493,10 +501,10 @@ def _(ap_slider, ce, current_mol, mo, mol_valid, topo_slider, tt_slider):
             )
             body = mo.vstack(
                 [
-                    slider,
                     mo.hstack([mo.Html(svg), card], justify="start", gap=2, widths=[3, 2]),
                     mo.md("**Where this bit sits in the full 2048-bit vector:**"),
                     mo.Html(strip),
+                    slider,
                 ]
             )
         return mo.vstack([mo.md(f"*{info.blurb}*"), body])
@@ -508,21 +516,26 @@ def _(ap_slider, ce, current_mol, mo, mol_valid, topo_slider, tt_slider):
             ce.FP_INFO["top_torsion"].label: _fp_tab("top_torsion", tt_slider),
         }
     )
-    mo.accordion(
-        {
-            "🧰 Aside: the rest of the RDKit toolbox (topological, atom-pair, torsion)": mo.vstack(
-                [
-                    mo.md(
-                        "Beyond MACCS's checklist and Morgan's circular environments, "
-                        "RDKit ships several more classical fingerprints. They each "
-                        "encode a different notion of structure — paths, atom pairs at "
-                        "a distance, torsions — but share Morgan's hashing machinery. "
-                        "Worth knowing they exist; not central to the story."
-                    ),
-                    tabbed_fps,
-                ]
-            )
-        }
+    mo.vstack(
+        [
+            mo.accordion(
+                {
+                    "🧰 Aside: the rest of the RDKit toolbox (topological, atom-pair, torsion)": mo.vstack(
+                        [
+                            mo.md(
+                                "Beyond MACCS's checklist and Morgan's circular environments, "
+                                "RDKit ships several more classical fingerprints. They each "
+                                "encode a different notion of structure — paths, atom pairs at "
+                                "a distance, torsions — but share Morgan's hashing machinery. "
+                                "Worth knowing they exist; not central to the story."
+                            ),
+                            tabbed_fps,
+                        ]
+                    )
+                }
+            ),
+            mo.md("---"),
+        ]
     )
     return
 
@@ -571,11 +584,11 @@ def _(chemeleon_dim, chemeleon_dims, chf, current_mol, mo, mol_valid):
         )
         _view = mo.vstack(
             [
-                chemeleon_dim,
                 mo.hstack([mo.Html(_svg), _card], justify="start", gap=2, widths=[3, 2]),
+                chemeleon_dim,
             ]
         )
-    _view
+    mo.vstack([_view, mo.md("---")])
     return
 
 
@@ -651,7 +664,7 @@ def _(cliff_choice, ctx, cv, mo, target_pair_choice):
         widths=[1, 1],
         gap=2,
     )
-    mo.vstack([_structures, _change, _endpoints])
+    mo.vstack([_structures, _change, _endpoints, mo.md("---")])
     return
 
 
@@ -697,6 +710,7 @@ def _(alt, cliff_choice, ctx, cv, mo, pd, target_pair_choice):
             mo.md("**How similar each fingerprint thinks this pair is:**"),
             mo.as_html(_chart),
             _punchline,
+            mo.md("---"),
         ]
     )
     return
@@ -762,7 +776,7 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
             ]
         )
         _view = mo.vstack([_intro, _grid])
-    _view
+    mo.vstack([_view, mo.md("---")])
     return
 
 
@@ -886,7 +900,7 @@ def _(cliff_choice, ctx, cv, mo, target_pair_choice):
                 ),
             ]
         )
-    _view
+    mo.vstack([_view, mo.md("---")])
     return
 
 
@@ -984,7 +998,7 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
                 ),
             ]
         )
-    _view
+    mo.vstack([_view, mo.md("---")])
     return
 
 
