@@ -136,16 +136,29 @@ def dim_sensitivity(mol: Chem.Mol) -> np.ndarray:
     return H.max(axis=0) - H.min(axis=0)
 
 
-def most_active_dims(mol: Chem.Mol, k: int = 40) -> list[int]:
-    """The ``k`` most structure-sensitive dimensions, **returned in ascending
-    index order** so a slider scrubbing them moves left-to-right through the
-    vector in a sensible way. (Selection is by sensitivity; order is by index.)"""
+def most_active_dims(mol: Chem.Mol, *, floor_frac: float = 0.25) -> list[int]:
+    """Structure-sensitive dimensions worth scrubbing, in ascending index order.
+
+    A dimension qualifies when its sensitivity ``s_k`` (see ``dim_sensitivity``)
+    is at least ``floor_frac`` of this molecule's most-sensitive dimension - a
+    **relative floor**, no fixed count. So the number of “active” dimensions
+    varies from molecule to molecule (a big, decorated molecule lights up many;
+    a small or symmetric one lights up few) - exactly like the varying on-bit
+    count of ECFP/MACCS. Returned sorted by index so scrubbing moves
+    left-to-right.
+
+    Symmetric/tiny molecules (e.g. benzene) can legitimately have *no* sensitive
+    dimension; we then fall back to the single most-varying one so the UI still
+    has something to show.
+    """
     spread = dim_sensitivity(mol)
+    mx = float(spread.max())
     order = np.argsort(spread)[::-1]
-    # Keep only dims that actually vary across atoms (skip flat/padding dims);
-    # fall back to the raw order if a tiny molecule has none.
-    varying = [int(d) for d in order if spread[d] > 1e-6]
-    picked = varying[:k] if varying else [int(d) for d in order[:k]]
+    if mx <= 1e-6:
+        return [int(order[0])]
+    threshold = floor_frac * mx
+    qualifying = [int(d) for d in order if spread[d] >= threshold]
+    picked = qualifying if qualifying else [int(order[0])]
     return sorted(picked)
 
 

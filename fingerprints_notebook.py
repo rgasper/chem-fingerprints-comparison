@@ -550,7 +550,7 @@ def _(current_mol, mo, mol_valid):
     # molecular data. Pick a dimension and see which atoms drive it for the
     # current molecule (the learned analog of the Morgan bit-scrubber).
     if mol_valid and current_mol.GetNumAtoms() >= 2:
-        _dims = chf.most_active_dims(current_mol, k=40)
+        _dims = chf.most_active_dims(current_mol)
     else:
         _dims = [0]
     chemeleon_dim = mo.ui.slider(

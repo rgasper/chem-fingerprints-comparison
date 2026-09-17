@@ -35,9 +35,10 @@ FP_LABELS: dict[str, str] = {
     "top_torsion": "Topological torsion",
     "maccs": "MACCS",
     "avalon": "Avalon",
+    "chemeleon": "CheMeleon (learned)",
 }
 FP_DISPLAY_ORDER: tuple[str, ...] = (
-    "morgan", "maccs", "atom_pair", "top_torsion", "rdkit_topo", "avalon",
+    "morgan", "maccs", "atom_pair", "top_torsion", "rdkit_topo",
 )
 
 _CHANGE_COLOR = (0.95, 0.45, 0.15)  # orange for the atoms that differ
@@ -84,13 +85,32 @@ class FPScore:
 
 
 def fingerprint_scores(cliff: ContextCliff) -> list[FPScore]:
-    """How similar does each classical fingerprint think this pair is?"""
+    """How similar does each fingerprint think this pair is?
+
+    Classical fingerprints use Tanimoto; the learned **CheMeleon** embedding is
+    dense/continuous, so it uses cosine similarity (its natural metric).
+    """
     m1, m2 = pair_mols(cliff)
     fps = all_classical([m1, m2])
     out: list[FPScore] = []
     for key in FP_DISPLAY_ORDER:
         sim = float(pairwise_similarity(fps[key])[0, 1])
         out.append(FPScore(key=key, label=FP_LABELS[key], similarity=sim))
+    # Append the learned fingerprint (cosine similarity of CheMeleon vectors).
+    try:
+        from fingerprints import chemeleon_fp as chf
+
+        v1 = chf.fingerprint(m1)
+        v2 = chf.fingerprint(m2)
+        denom = float((v1 @ v1) ** 0.5 * (v2 @ v2) ** 0.5)
+        cos = float(v1 @ v2) / denom if denom > 0 else 0.0
+        out.append(
+            FPScore(key="chemeleon", label=FP_LABELS["chemeleon"], similarity=cos)
+        )
+    except Exception:
+        # If the CheMeleon weights aren't available, just omit it - the
+        # classical bars still tell the story and nothing throws.
+        pass
     return out
 
 
