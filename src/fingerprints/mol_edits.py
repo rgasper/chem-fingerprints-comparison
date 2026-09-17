@@ -319,16 +319,17 @@ def chemeleon_delta_svg(
     before: Chem.Mol,
     after: Chem.Mol,
     *,
-    top_k: int = 40,
     width: int = 920,
-    height: int = 120,
+    height: int = 46,
 ) -> str | None:
-    """The CheMeleon embedding's response as a diverging bar chart.
+    """The CheMeleon embedding's response as a full-length diverging strip.
 
-    CheMeleon dimensions are continuous, so there are no bits to flip - instead
-    we show, for the dimensions that moved most, the signed change (after minus
-    before): bars up (blue) = the edit pushed that dimension up, down (orange) =
-    down. Returns None if the learned weights aren't available.
+    Every one of the 2048 dimensions is a cell along the strip, coloured by how
+    much the edit moved it: **blue** = the dimension went up, **orange** = it
+    went down, opacity scaled by the size of the change. Same layout as the
+    single-molecule CheMeleon strip elsewhere in the notebook, so 'the
+    fingerprint lit up here' reads the same way. Returns None if the learned
+    weights aren't available.
     """
     try:
         from fingerprints import chemeleon_fp as chf
@@ -340,34 +341,31 @@ def chemeleon_delta_svg(
     import numpy as np
 
     delta = va - vb
-    order = np.argsort(-np.abs(delta))[:top_k]
-    if len(order) == 0:
+    n = len(delta)
+    if n == 0:
         return None
-    mx = float(np.abs(delta[order]).max()) or 1.0
-    pad = 6
+    mx = float(np.abs(delta).max()) or 1.0
+    up, down = "#1c7ed6", "#e8820c"
+    pad = 2
     inner_w = width - 2 * pad
-    mid = height / 2
-    bar_w = inner_w / len(order)
-    up, down = "#4c6ef5", "#e8820c"
+    band_h = height - 2 * pad
+    tick_w = max(inner_w / n, 0.6)
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">',
-        f'<line x1="{pad}" y1="{mid:.1f}" x2="{width - pad}" y2="{mid:.1f}" '
-        f'stroke="#adb5bd" stroke-width="1" />',
+        f'<rect x="{pad}" y="{pad}" width="{inner_w}" height="{band_h}" '
+        f'fill="#f1f3f5" stroke="#dee2e6" stroke-width="0.5" />',
     ]
-    for i, dim in enumerate(order):
-        d = float(delta[dim])
-        x = pad + i * bar_w
-        h = abs(d) / mx * (mid - pad)
-        if d >= 0:
-            parts.append(
-                f'<rect x="{x:.2f}" y="{mid - h:.2f}" width="{max(bar_w - 1, 1):.2f}" '
-                f'height="{h:.2f}" fill="{up}" />'
-            )
-        else:
-            parts.append(
-                f'<rect x="{x:.2f}" y="{mid:.2f}" width="{max(bar_w - 1, 1):.2f}" '
-                f'height="{h:.2f}" fill="{down}" />'
-            )
+    for k in range(n):
+        frac = abs(float(delta[k])) / mx
+        if frac <= 0.02:
+            continue
+        x = pad + (k / n) * inner_w
+        alpha = 0.12 + 0.88 * min(frac, 1.0)
+        color = up if delta[k] >= 0 else down
+        parts.append(
+            f'<rect x="{x:.2f}" y="{pad}" width="{max(tick_w, 1.0):.2f}" '
+            f'height="{band_h:.1f}" fill="{color}" fill-opacity="{alpha:.2f}" />'
+        )
     parts.append("</svg>")
     return "".join(parts)

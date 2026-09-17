@@ -132,7 +132,7 @@ def exercise_mol_edits():
             # diff visualisations must render without throwing
             medits.ecfp_diff_stats(mol, prod)
             medits.ecfp_diff_svg(mol, prod)
-            medits.chemeleon_delta_svg(mol, prod, top_k=40)
+            medits.chemeleon_delta_svg(mol, prod)
         # every edit key against every mol (including invalid) must not throw
         for e in medits.all_edits():
             medits.apply_edit(mol, e.key)

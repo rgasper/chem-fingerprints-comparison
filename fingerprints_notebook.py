@@ -1179,7 +1179,7 @@ def _(applicable, current_mol, edit_choice, med, mo, mol_valid):
             _stats = med.ecfp_diff_stats(current_mol, _product)
             _ecfp_svg = med.ecfp_diff_svg(current_mol, _product, width=900, height=46)
             _chem_svg = med.chemeleon_delta_svg(
-                current_mol, _product, width=900, height=110
+                current_mol, _product, width=900, height=46
             )
 
             _structures = mo.hstack(
@@ -1222,13 +1222,13 @@ def _(applicable, current_mol, edit_choice, med, mo, mol_valid):
                 _chem_block = mo.vstack(
                     [
                         mo.md(
-                            "**CheMeleon (learned) — which dimensions moved most?**"
+                            "**CheMeleon (learned) — how the embedding shifted**"
                         ),
                         mo.Html(_chem_svg),
                         mo.md(
-                            '<span style="color:#4c6ef5">█ pushed up</span> &nbsp; '
-                            '<span style="color:#e8820c">█ pushed down</span> &nbsp; '
-                            "(top 40 of 2048 dimensions by absolute change — no "
+                            '<span style="color:#1c7ed6">█ dimension moved up</span> &nbsp; '
+                            '<span style="color:#e8820c">█ dimension moved down</span> &nbsp; '
+                            "(all 2048 dimensions; shade = size of change — no "
                             "discrete bits, just a continuous shift)"
                         ),
                     ]
