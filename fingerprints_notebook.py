@@ -910,7 +910,18 @@ def _(mo):
 
 
 @app.cell
-def _(alt, cliff_choice, ctx, mo, pd, target_pair_choice):
+def _(mo):
+    # Resample button for the flat-pair gallery below (a fresh random draw of
+    # 'similar structure, similar activity' pairs - the majority the assumption
+    # gets right). value increments on each click -> reactive reseed.
+    resample_flat = mo.ui.button(
+        label="🎲 Sample different flat pairs", value=0, on_click=lambda v: v + 1
+    )
+    return (resample_flat,)
+
+
+@app.cell
+def _(alt, cliff_choice, ctx, mo, pd, resample_flat, target_pair_choice):
     from fingerprints import knn_view as knn
 
     # The general impossibility argument, made concrete. Any structure-only
@@ -952,8 +963,7 @@ def _(alt, cliff_choice, ctx, mo, pd, target_pair_choice):
             .encode(
                 x=alt.X("gap:N", sort=alt.SortField("lo"),
                         title="activity gap between the pair (|ΔpKi|, log units)"),
-                y=alt.Y("count:Q", title="number of similar pairs",
-                        scale=alt.Scale(type="symlog")),
+                y=alt.Y("count:Q", title="number of similar pairs"),
                 color=alt.Color(
                     "kind:N",
                     scale=alt.Scale(
@@ -986,7 +996,55 @@ def _(alt, cliff_choice, ctx, mo, pd, target_pair_choice):
             f"never contained — which is why activity cliffs are a well-documented "
             f"hard limit in QSAR, not a modelling bug."
         ).callout(kind="danger")
-        _view = mo.vstack([_msg, mo.as_html(_chart)])
+
+        # A gallery of the flat majority: similar structures whose activity
+        # really is similar (resampled on the button click).
+        from rdkit import Chem as _Chem
+        from rdkit.Chem.Draw import rdMolDraw2D as _d2d
+
+        def _pair_svg(s1, s2, w=150, h=110):
+            def one(s):
+                m = _Chem.MolFromSmiles(s)
+                d = _d2d.MolDraw2DSVG(w, h)
+                d.drawOptions().addStereoAnnotation = False
+                if m is not None:
+                    _d2d.PrepareAndDrawMolecule(d, m)
+                d.FinishDrawing()
+                return d.GetDrawingText()
+            return one(s1), one(s2)
+
+        def _flat_card(fp):
+            a, b = _pair_svg(fp["smiles_1"], fp["smiles_2"])
+            gap = abs(fp["act_1"] - fp["act_2"])
+            return mo.vstack(
+                [
+                    mo.hstack([mo.Html(a), mo.Html(b)], justify="center", gap=0.5),
+                    mo.md(
+                        f"<div style='text-align:center;font-size:12px'>"
+                        f"Tanimoto <b>{fp['tanimoto']:.2f}</b> · pKi "
+                        f"{fp['act_1']:.1f} vs {fp['act_2']:.1f} — "
+                        f"<span style='color:#2b8a3e'>gap {gap:.2f} (flat ✓)</span></div>"
+                    ),
+                ]
+            )
+
+        _flats = knn.sample_flat_pairs(_cliff_ep, 3, seed=resample_flat.value)
+        _gallery = mo.vstack(
+            [
+                mo.md(
+                    "**The flat majority — similar structure, similar activity.** "
+                    "These random 'similar' pairs behave exactly as the assumption "
+                    "predicts, which is why the assumption pays off. Resample to see "
+                    "more; you'll have to hunt to find a cliff."
+                ),
+                mo.hstack(
+                    [_flat_card(fp) for fp in _flats] or [mo.md("*(no pairs)*")],
+                    widths=[1] * max(len(_flats), 1), gap=1,
+                ),
+                resample_flat,
+            ]
+        )
+        _view = mo.vstack([_msg, mo.as_html(_chart), _gallery])
     mo.vstack([_view, mo.md("---")])
     return (knn,)
 
@@ -1077,27 +1135,51 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
             .properties(width=150, height=200)
         )
 
-        # Neighbour tables: where each molecule actually sits.
-        def _neighbor_rows(m):
-            out = ""
-            for nb in m["neighbors"]:
-                out += (
-                    f"<tr><td style='padding:2px 8px;font-family:monospace;"
-                    f"font-size:11px'>{nb['smiles'][:34]}</td>"
-                    f"<td style='padding:2px 8px;text-align:right'>{nb['tanimoto']:.2f}</td>"
-                    f"<td style='padding:2px 8px;text-align:right'>{nb['activity']:.2f}</td></tr>"
-                )
-            return out
+        # Neighbour panels: draw each cliff molecule and its nearest
+        # neighbours as structures, so you SEE it sits among similar-activity
+        # molecules (colour the neighbour caption by how close its activity is).
+        from rdkit import Chem as _Chem
+        from rdkit.Chem.Draw import rdMolDraw2D as _d2d
 
-        def _neighbor_table(m, name):
-            return mo.md(
-                f"**{name}** — true pKi **{m['true']:.2f}**, kNN says "
-                f"**{knn.pred_at_k(m, _k):.2f}** at k={_k}\n\n"
-                "<table style='border-collapse:collapse;font-size:12px'>"
-                "<tr><th style='text-align:left;padding:2px 8px'>nearest neighbour</th>"
-                "<th style='padding:2px 8px'>Tanimoto</th>"
-                "<th style='padding:2px 8px'>pKi</th></tr>"
-                f"{_neighbor_rows(m)}</table>"
+        def _mol_svg(smi, w, h, highlight=False):
+            m = _Chem.MolFromSmiles(smi)
+            d = _d2d.MolDraw2DSVG(w, h)
+            d.drawOptions().addStereoAnnotation = False
+            if m is not None:
+                _d2d.PrepareAndDrawMolecule(d, m)
+            d.FinishDrawing()
+            return d.GetDrawingText()
+
+        def _neighbor_panel(m, name):
+            head = mo.vstack(
+                [
+                    mo.md(f"**{name}** — true pKi **{m['true']:.2f}**"),
+                    mo.Html(_mol_svg(m["smiles"], 200, 150)),
+                    mo.md(
+                        f"<div style='text-align:center'>kNN predicts "
+                        f"<b>{knn.pred_at_k(m, _k):.2f}</b> at k={_k}</div>"
+                    ),
+                    mo.md("<div style='text-align:center;color:#868e96'>↓ its nearest neighbours ↓</div>"),
+                ]
+            )
+            cards = []
+            for nb in m["neighbors"]:
+                near = abs(nb["activity"] - m["true"]) < 1.0
+                col = "#2b8a3e" if near else "#e8820c"
+                cards.append(
+                    mo.vstack(
+                        [
+                            mo.Html(_mol_svg(nb["smiles"], 120, 90)),
+                            mo.md(
+                                f"<div style='text-align:center;font-size:11px'>"
+                                f"T={nb['tanimoto']:.2f}<br>"
+                                f"<span style='color:{col}'>pKi {nb['activity']:.2f}</span></div>"
+                            ),
+                        ]
+                    )
+                )
+            return mo.vstack(
+                [head, mo.hstack(cards, justify="center", gap=0.5)]
             )
 
         _verdict = mo.md(
@@ -1130,8 +1212,8 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
                 k_slider,
                 _verdict,
                 mo.hstack(
-                    [_neighbor_table(_m1, "molecule 1"),
-                     _neighbor_table(_m2, "molecule 2")],
+                    [_neighbor_panel(_m1, "molecule 1"),
+                     _neighbor_panel(_m2, "molecule 2")],
                     widths=[1, 1], gap=2,
                 ),
             ]

@@ -146,6 +146,25 @@ def analyse_endpoint(label: str, dataset: str) -> dict:
         "gap_hist": gap_hist,
     }
 
+    # A pool of *flat* similar pairs (near-identical structure, near-identical
+    # activity) the notebook can randomly sample - the 85% majority that the
+    # 'similar -> similar' assumption gets right, shown next to a click.
+    rng = np.random.default_rng(0)
+    flat_sim = sim_mask & (dd < FLAT_GAP)
+    ii, jj = iu[0][flat_sim], iu[1][flat_sim]
+    order = rng.permutation(len(ii))[:60]
+    flat_pool = [
+        {
+            "smiles_1": smis[int(ii[p])],
+            "smiles_2": smis[int(jj[p])],
+            "tanimoto": float(S_all[int(ii[p]), int(jj[p])]),
+            "act_1": float(y[int(ii[p])]),
+            "act_2": float(y[int(jj[p])]),
+        }
+        for p in order
+    ]
+    smoothness["flat_pool"] = flat_pool
+
     # --- held-out R^2 vs k (test molecules predicted from train neighbours) ---
     S_te_tr = tanimoto(Xte, Xtr)
     k_curve = []

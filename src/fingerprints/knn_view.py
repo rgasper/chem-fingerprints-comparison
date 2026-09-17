@@ -47,11 +47,24 @@ def smoothness(endpoint: str) -> dict:
     """The 'why any structure-only model must be smooth' census for an endpoint.
 
     Shape: {sim_threshold, n_similar_pairs, frac_flat, frac_cliff, flat_gap,
-    cliff_gap, gap_hist:[{lo,hi,count}]}. Among all molecule pairs that are
-    structurally similar (Tanimoto >= sim_threshold), what fraction are flat
-    (|dpKi| < flat_gap) vs cliffs (|dpKi| > cliff_gap).
+    cliff_gap, gap_hist:[{lo,hi,count}], flat_pool:[{smiles_1,smiles_2,tanimoto,
+    act_1,act_2}]}. Among all molecule pairs that are structurally similar
+    (Tanimoto >= sim_threshold), what fraction are flat (|dpKi| < flat_gap) vs
+    cliffs (|dpKi| > cliff_gap); ``flat_pool`` is a random sample of the flat
+    majority for display.
     """
     return _data()["endpoints"][endpoint]["smoothness"]
+
+
+def sample_flat_pairs(endpoint: str, n: int, seed: int) -> list[dict]:
+    """Deterministically sample ``n`` flat similar pairs from the cached pool."""
+    import random
+
+    pool = smoothness(endpoint).get("flat_pool", [])
+    if not pool:
+        return []
+    rng = random.Random(seed)
+    return rng.sample(pool, min(n, len(pool)))
 
 
 def cliff_pair(endpoint: str, index: int) -> dict | None:
