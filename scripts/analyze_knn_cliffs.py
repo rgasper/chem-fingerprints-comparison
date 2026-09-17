@@ -54,7 +54,7 @@ ENDPOINTS = {
     "Dopamine D4": "CHEMBL219_Ki",
 }
 K_GRID = [1, 2, 3, 5, 8, 12, 20, 30, 50, 75, 100]
-N_NEIGHBORS = 4  # neighbours to record per cliff molecule
+N_NEIGHBORS = 8  # neighbours to record per cliff molecule (display caps below)
 SIM_THRESHOLD = 0.7  # "structurally similar" cutoff for the smoothness stat
 FLAT_GAP = 1.0  # |dpKi| below this = a flat (smooth) pair
 CLIFF_GAP = 2.0  # |dpKi| above this = an activity cliff

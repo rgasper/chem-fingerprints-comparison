@@ -1151,6 +1151,9 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
             return d.GetDrawingText()
 
         def _neighbor_panel(m, name):
+            _cap = 8  # most neighbour structures we'll draw
+            _show = min(_k, _cap)
+            _nbrs = m["neighbors"][:_show]
             head = mo.vstack(
                 [
                     mo.md(f"**{name}** — true pKi **{m['true']:.2f}**"),
@@ -1159,11 +1162,15 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
                         f"<div style='text-align:center'>kNN predicts "
                         f"<b>{knn.pred_at_k(m, _k):.2f}</b> at k={_k}</div>"
                     ),
-                    mo.md("<div style='text-align:center;color:#868e96'>↓ its nearest neighbours ↓</div>"),
+                    mo.md(
+                        f"<div style='text-align:center;color:#868e96'>↓ the "
+                        f"{'nearest neighbour' if _show == 1 else f'{_show} nearest neighbours'} "
+                        f"kNN averages at k={_k} ↓</div>"
+                    ),
                 ]
             )
             cards = []
-            for nb in m["neighbors"]:
+            for nb in _nbrs:
                 near = abs(nb["activity"] - m["true"]) < 1.0
                 col = "#2b8a3e" if near else "#e8820c"
                 cards.append(
@@ -1178,22 +1185,32 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
                         ]
                     )
                 )
+            if _k > _cap:
+                cards.append(
+                    mo.md(
+                        f"<div style='text-align:center;color:#868e96;font-size:12px;"
+                        f"padding-top:35px'>…and<br><b>{_k - _cap}</b> more<br>averaged in</div>"
+                    )
+                )
             return mo.vstack(
                 [head, mo.hstack(cards, justify="center", gap=0.5)]
             )
 
+        # Honest, per-pair statement: the *largest* gap kNN opens across ANY k.
+        _max_gap = max(
+            abs(a["pred"] - b["pred"])
+            for a, b in zip(_m1["pred_by_k"], _m2["pred_by_k"])
+        )
         _verdict = mo.md(
             f"At **k={_k}**, kNN predicts these two molecules **{_p1:.2f}** and "
             f"**{_p2:.2f}** — a gap of just **{_pred_gap:.2f}**, though the real gap "
-            f"is **{_true_gap:.2f}**. They sit in the *same fingerprint "
-            f"neighbourhood* (see the shared, similar-activity neighbours below), "
-            f"so they inherit nearly the same prediction. "
-            f"Drag k and watch the bind: the R² peaks around **k={_best['k']}** "
-            f"(R² {_best['r2']:.2f}); shrinking k toward 1 to 'memorise' each "
-            f"molecule makes the global fit *worse*, and still barely opens the "
-            f"cliff gap. No neighbourhood size both generalises **and** sees the "
-            f"cliff — because under this fingerprint the two molecules simply "
-            f"aren't far apart."
+            f"is **{_true_gap:.2f}**. The structures below are exactly the {_k} "
+            f"molecule{'s' if _k != 1 else ''} kNN averages at this k. "
+            f"**Slide k across its whole range:** the widest gap it ever opens for "
+            f"this pair is only **{_max_gap:.2f}** — no neighbourhood size, not even "
+            f"k=1, comes close to the true **{_true_gap:.2f}**. Meanwhile global "
+            f"accuracy peaks near **k={_best['k']}** (R² {_best['r2']:.2f}); the k "
+            f"that fits the dataset best still can't see this cliff."
         ).callout(kind="warn")
 
         _view = mo.vstack(
