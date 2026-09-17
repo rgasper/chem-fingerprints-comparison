@@ -114,6 +114,36 @@ def fingerprint_scores(cliff: ContextCliff) -> list[FPScore]:
     return out
 
 
+def plif_similarity(pair_key: str, index: int, target: str) -> float | None:
+    """Tanimoto between the two ligands' interaction fingerprints in one pocket.
+
+    Unlike the structure fingerprints (which read only the 2D graph), the PLIF
+    is read off each ligand's *3D pose in the binding site*: every 'on' bit is a
+    specific contact (an H-bond to a residue, a π-stack, ...). We binarise each
+    pose's ``(residue, interaction-type) -> count`` fingerprint to presence and
+    take Tanimoto over the union of contacts.
+
+    Returns ``None`` when this cliff has no cached poses (so the caller can just
+    omit the bar rather than fabricate a number). Requires the four Boltz poses
+    produced offline by ``scripts/boltz_fold_cliffs.py``.
+    """
+    try:
+        from fingerprints import pose_view as pv
+
+        if not pv.has_poses(pair_key, index):
+            return None
+        poses = pv.load_all(pair_key, index)
+        fp1 = pv.interaction_fingerprint(poses[f"mol1_{target}"])
+        fp2 = pv.interaction_fingerprint(poses[f"mol2_{target}"])
+    except (KeyError, OSError):
+        return None
+    bits1, bits2 = set(fp1), set(fp2)
+    if not bits1 and not bits2:
+        return None
+    union = len(bits1 | bits2)
+    return (len(bits1 & bits2) / union) if union else 0.0
+
+
 def fold_change(delta_pki: float) -> str:
     """Turn a |ΔpKi| into a readable potency-fold string, e.g. '≈250×'."""
     fold = 10.0 ** delta_pki

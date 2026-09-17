@@ -755,15 +755,26 @@ def _(alt, cliff_choice, ctx, cv, mo, pd, target_pair_choice):
     _tp = ctx.by_key()[target_pair_choice.value]
     _pair = _tp.cliffs[cliff_choice.value]
     _scores = cv.fingerprint_scores(_pair)
-    _df = pd.DataFrame(
-        {
-            "fingerprint": [s.label for s in _scores],
-            "similarity": [round(s.similarity, 3) for s in _scores],
-        }
-    )
+    # An interaction fingerprint reads the 3D pose, not the 2D graph - add it as
+    # a contrasting bar when this cliff has cached poses (in the cliff target's
+    # pocket, the endpoint where potency actually moves).
+    _plif = cv.plif_similarity(_tp.key, cliff_choice.value, _pair.cliff_on)
+    _rows = [
+        {"fingerprint": s.label, "similarity": round(s.similarity, 3), "kind": "structure"}
+        for s in _scores
+    ]
+    if _plif is not None:
+        _rows.append(
+            {
+                "fingerprint": f"Interaction FP · {_pair.cliff_on} pocket",
+                "similarity": round(_plif, 3),
+                "kind": "interaction",
+            }
+        )
+    _df = pd.DataFrame(_rows)
     _chart = (
         alt.Chart(_df)
-        .mark_bar(cornerRadius=3, color="#4c6ef5")
+        .mark_bar(cornerRadius=3)
         .encode(
             x=alt.X(
                 "similarity:Q",
@@ -771,25 +782,47 @@ def _(alt, cliff_choice, ctx, cv, mo, pd, target_pair_choice):
                 scale=alt.Scale(domain=[0, 1]),
             ),
             y=alt.Y("fingerprint:N", sort="-x"),
+            color=alt.Color(
+                "kind:N",
+                scale=alt.Scale(
+                    domain=["structure", "interaction"],
+                    range=["#4c6ef5", "#e8820c"],
+                ),
+                legend=alt.Legend(title="reads", orient="bottom"),
+            ),
             tooltip=[alt.Tooltip("fingerprint:N"), alt.Tooltip("similarity:Q")],
         )
-        .properties(height=220)
+        .properties(height=250)
     )
     _lo = min(s.similarity for s in _scores)
     _hi = max(s.similarity for s in _scores)
     _punchline = mo.md(
-        f"Every fingerprint calls this pair **similar** (similarity "
+        f"Every **structure** fingerprint calls this pair **similar** (similarity "
         f"{_lo:.2f}–{_hi:.2f}) — they only see the small structural change. "
         f"That verdict is **right for {_pair.flat_on}** (where the pair really is "
         f"flat) and **badly wrong for {_pair.cliff_on}** (where it's a cliff). "
         "One structural similarity, two opposite biological realities — the "
         "fingerprint cannot tell which target you mean."
     ).callout(kind="warn")
+    _bridge = None
+    if _plif is not None:
+        _bridge = mo.md(
+            f"The **orange bar** is different in kind. It's read off each ligand's "
+            f"predicted **3D pose in the {_pair.cliff_on} pocket** — which specific "
+            f"contacts (H-bonds, π-stacks, salt bridges) each molecule actually "
+            f"makes. On that footing the pair scores **{_plif:.2f}**, far below the "
+            f"structure fingerprints: the interaction fingerprint *resolves* a "
+            f"difference the 2D graph hides. (These are Boltz-predicted poses for a "
+            f"handful of pairs, so read the number as a qualitative contrast, not a "
+            f"benchmark.) That's the move the next section makes — leaving 2D behind "
+            f"and looking at the pose itself."
+        ).callout(kind="info")
     mo.vstack(
         [
             mo.md("**How similar each fingerprint thinks this pair is:**"),
             mo.as_html(_chart),
             _punchline,
+            *([_bridge] if _bridge is not None else []),
             mo.md("---"),
         ]
     )

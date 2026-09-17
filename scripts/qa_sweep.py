@@ -108,6 +108,9 @@ def exercise_cliffs():
             cv.pair_svgs(c, width=200, height=150)
             cv.fold_change(max(c.delta_a, c.delta_b))
             cv.fingerprint_scores(c)
+            # PLIF-Tanimoto for the cliff pocket (None when unposed).
+            cv.plif_similarity(tp.key, i, c.cliff_on)
+            cv.plif_similarity(tp.key, i, c.flat_on)
 
 
 check("section 4 cliffs", exercise_cliffs)
