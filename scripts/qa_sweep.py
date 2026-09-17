@@ -24,6 +24,7 @@ from fingerprints import chemeleon_fp as chf
 from fingerprints import cliff_view as cv
 from fingerprints import gallery as gal
 from fingerprints import mol_edits as medits
+from fingerprints import knn_view as knn
 from fingerprints import importance_view as iv
 from fingerprints import maccs_explorer as mx
 from fingerprints import morgan_explorer as me
@@ -140,6 +141,30 @@ def exercise_mol_edits():
 
 
 check("fingerprint playground mol-edits", exercise_mol_edits)
+
+
+# --- kNN cliff-failure analysis view -------------------------------------
+def exercise_knn():
+    if not knn.has_data():
+        return
+    grid = knn.k_grid()
+    for ep in knn.endpoints():
+        knn.k_curve(ep)
+        knn.endpoint_meta(ep)
+        knn.best_k(ep)
+        for i in range(6):
+            p = knn.cliff_pair(ep, i)
+            if p is None:
+                continue
+            for m in (p["mol1"], p["mol2"]):
+                for k in grid + [4, 999]:  # on- and off-grid
+                    knn.pred_at_k(m, k)
+    # bogus lookups must return None, not throw
+    assert knn.cliff_pair("Nope", 0) is None
+    assert knn.cliff_pair(knn.endpoints()[0], 99) is None
+
+
+check("kNN cliff-failure view", exercise_knn)
 
 
 # --- Section 4b: poses + interaction fingerprints ------------------------

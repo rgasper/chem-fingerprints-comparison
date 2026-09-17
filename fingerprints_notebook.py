@@ -894,6 +894,173 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
 
 
 @app.cell
+def _(mo):
+    mo.md(r"""
+    ### Why a similarity model can't see the cliff
+
+    Feature-importance shows *where* a model looks; it doesn't explain *why* it
+    stays blind. For that, use the simplest possible model — **k-nearest-
+    neighbours** on the fingerprint. A molecule's predicted activity is just the
+    **average activity of its k most-similar neighbours**, where "similar" is
+    the fingerprint's Tanimoto. Nothing is learned on top: the fingerprint's
+    notion of similarity *is* the entire model. So whatever kNN can't do here is
+    the fingerprint's limitation, laid bare.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    from fingerprints import knn_view as knn
+
+    # The only knob kNN has is neighbourhood size k - the honest analog of
+    # "move the decision boundary". Top-level so the section reacts to it.
+    _grid = knn.k_grid() if knn.has_data() else [1, 5, 20]
+    k_slider = mo.ui.slider(
+        steps=_grid,
+        value=_grid[min(3, len(_grid) - 1)],
+        label="Neighbourhood size k",
+        show_value=True,
+        full_width=True,
+    )
+    return k_slider, knn
+
+
+@app.cell
+def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
+    # kNN cliff analysis was precomputed for the Dopamine D3/D4 datasets.
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _idx = cliff_choice.value
+    _k = k_slider.value
+
+    _eps = knn.endpoints() if knn.has_data() else []
+    _cliff_ep = _tp.cliffs[_idx].cliff_on if _tp.cliffs else None
+    _pair = knn.cliff_pair(_cliff_ep, _idx) if _cliff_ep in _eps else None
+
+    if _pair is None:
+        _view = mo.md(
+            "*The kNN cliff analysis was precomputed for the **Dopamine D3/D4** "
+            "pair — pick that pair above to explore it. "
+            "(Run `scripts/analyze_knn_cliffs.py` to add more.)*"
+        ).callout(kind="info")
+    else:
+        _ep = _pair["cliff_on"]
+        _m1, _m2 = _pair["mol1"], _pair["mol2"]
+        _meta = knn.endpoint_meta(_ep)
+        _best = knn.best_k(_ep)
+
+        # (a) The k tradeoff: held-out R^2 vs k, with the chosen k marked.
+        _curve = pd.DataFrame(knn.k_curve(_ep))
+        _line = (
+            alt.Chart(_curve)
+            .mark_line(point=True, color="#4c6ef5")
+            .encode(
+                x=alt.X("k:Q", title="neighbourhood size k",
+                        scale=alt.Scale(type="log")),
+                y=alt.Y("r2:Q", title="held-out R² (accuracy)"),
+                tooltip=["k:Q", alt.Tooltip("r2:Q", format=".3f")],
+            )
+        )
+        _rule = (
+            alt.Chart(pd.DataFrame({"k": [_k]}))
+            .mark_rule(color="#e8820c", strokeWidth=2)
+            .encode(x="k:Q")
+        )
+        _acc_chart = (_line + _rule).properties(height=200)
+
+        # (b) The cliff itself: predicted vs true for both molecules at this k.
+        _p1 = knn.pred_at_k(_m1, _k)
+        _p2 = knn.pred_at_k(_m2, _k)
+        _pred_gap = abs(_p1 - _p2)
+        _true_gap = abs(_m1["true"] - _m2["true"])
+        _bars = pd.DataFrame(
+            [
+                {"mol": "molecule 1", "kind": "true activity", "pKi": _m1["true"]},
+                {"mol": "molecule 1", "kind": f"kNN predicted (k={_k})", "pKi": _p1},
+                {"mol": "molecule 2", "kind": "true activity", "pKi": _m2["true"]},
+                {"mol": "molecule 2", "kind": f"kNN predicted (k={_k})", "pKi": _p2},
+            ]
+        )
+        _cliff_chart = (
+            alt.Chart(_bars)
+            .mark_bar()
+            .encode(
+                x=alt.X("kind:N", title=None, axis=alt.Axis(labelAngle=-15)),
+                y=alt.Y("pKi:Q", title=f"{_ep} pKi"),
+                color=alt.Color(
+                    "kind:N",
+                    scale=alt.Scale(range=["#2b8a3e", "#adb5bd"]),
+                    legend=None,
+                ),
+                column=alt.Column("mol:N", title=None),
+            )
+            .properties(width=150, height=200)
+        )
+
+        # Neighbour tables: where each molecule actually sits.
+        def _neighbor_rows(m):
+            out = ""
+            for nb in m["neighbors"]:
+                out += (
+                    f"<tr><td style='padding:2px 8px;font-family:monospace;"
+                    f"font-size:11px'>{nb['smiles'][:34]}</td>"
+                    f"<td style='padding:2px 8px;text-align:right'>{nb['tanimoto']:.2f}</td>"
+                    f"<td style='padding:2px 8px;text-align:right'>{nb['activity']:.2f}</td></tr>"
+                )
+            return out
+
+        def _neighbor_table(m, name):
+            return mo.md(
+                f"**{name}** — true pKi **{m['true']:.2f}**, kNN says "
+                f"**{knn.pred_at_k(m, _k):.2f}** at k={_k}\n\n"
+                "<table style='border-collapse:collapse;font-size:12px'>"
+                "<tr><th style='text-align:left;padding:2px 8px'>nearest neighbour</th>"
+                "<th style='padding:2px 8px'>Tanimoto</th>"
+                "<th style='padding:2px 8px'>pKi</th></tr>"
+                f"{_neighbor_rows(m)}</table>"
+            )
+
+        _verdict = mo.md(
+            f"At **k={_k}**, kNN predicts these two molecules **{_p1:.2f}** and "
+            f"**{_p2:.2f}** — a gap of just **{_pred_gap:.2f}**, though the real gap "
+            f"is **{_true_gap:.2f}**. They sit in the *same fingerprint "
+            f"neighbourhood* (see the shared, similar-activity neighbours below), "
+            f"so they inherit nearly the same prediction. "
+            f"Drag k and watch the bind: the R² peaks around **k={_best['k']}** "
+            f"(R² {_best['r2']:.2f}); shrinking k toward 1 to 'memorise' each "
+            f"molecule makes the global fit *worse*, and still barely opens the "
+            f"cliff gap. No neighbourhood size both generalises **and** sees the "
+            f"cliff — because under this fingerprint the two molecules simply "
+            f"aren't far apart."
+        ).callout(kind="warn")
+
+        _view = mo.vstack(
+            [
+                mo.md(
+                    f"**{_ep}** — {_meta['n_total']} molecules. The only knob is k; "
+                    "the orange line marks your choice."
+                ),
+                mo.hstack(
+                    [
+                        mo.vstack([mo.md("**Global accuracy vs k**"), mo.as_html(_acc_chart)]),
+                        mo.vstack([mo.md("**This cliff pair at k**"), mo.as_html(_cliff_chart)]),
+                    ],
+                    widths=[1, 1], gap=2,
+                ),
+                k_slider,
+                _verdict,
+                mo.hstack(
+                    [_neighbor_table(_m1, "molecule 1"),
+                     _neighbor_table(_m2, "molecule 2")],
+                    widths=[1, 1], gap=2,
+                ),
+            ]
+        )
+    mo.vstack([_view, mo.md("---")])
+    return
+
+
+@app.cell
 def _(cliff_choice, ctx, cv, mo, target_pair_choice):
     from fingerprints import pose_view as pv
     from fingerprints.complex_viewer import ComplexViewer

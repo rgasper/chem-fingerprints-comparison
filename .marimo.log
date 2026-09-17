@@ -6,5 +6,6 @@ Run uv add --upgrade marimo or python -m pip install --upgrade marimo to upgrade
 
         ➜  URL: http://localhost:2718
 
-[W 260917 15:11:20 middleware:162] Received request with invalid server token (skew protection token). This could mean the server has new code deployed but the client is still using an old version.Expected: 7L7F-yqnxnMu9znAaV9Ksg, got: i5Tsl6BsgfAdB1stDl0rdQ
-[W 260917 15:11:26 health:451] Neither nvidia-smi nor rocm-smi succeeded, cannot get GPU stats
+[W 260917 17:26:50 health:451] Neither nvidia-smi nor rocm-smi succeeded, cannot get GPU stats
+[W 260917 17:26:50 middleware:162] Received request with invalid server token (skew protection token). This could mean the server has new code deployed but the client is still using an old version.Expected: H18g4EU0GDzO4Dpm1q4Jfg, got: 7L7F-yqnxnMu9znAaV9Ksg
+[W 260917 17:26:52 middleware:162] Received request with invalid server token (skew protection token). This could mean the server has new code deployed but the client is still using an old version.Expected: H18g4EU0GDzO4Dpm1q4Jfg, got: 7L7F-yqnxnMu9znAaV9Ksg
