@@ -703,6 +703,70 @@ def _(alt, cliff_choice, ctx, cv, mo, pd, target_pair_choice):
 
 
 @app.cell
+def _(cliff_choice, ctx, mo, target_pair_choice):
+    from rdkit import Chem as _Chem
+
+    from fingerprints import importance_view as iv
+
+    # Where does a MODEL look? Train a RandomForest to predict activity from
+    # each fingerprint, then project its feature importances back onto the
+    # cliff pair - as a molecule heatmap and as an importance-tinted strip.
+    # (Trained on the Dopamine D3/D4 datasets; shown when that pair is picked.)
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _cl = _tp.cliffs[cliff_choice.value]
+    _eps = iv.endpoints() if iv.has_data() else []
+    _have = _tp.target_a in _eps and _tp.target_b in _eps
+    if not _have:
+        _view = mo.md(
+            "*Feature-importance models were trained on the **Dopamine D3/D4** "
+            "pair - pick that pair above to see where the models look. "
+            "(Run `scripts/train_importance.py` to add more.)*"
+        ).callout(kind="info")
+    else:
+        _m1 = _Chem.MolFromSmiles(_cl.smiles_1)
+        _m2 = _Chem.MolFromSmiles(_cl.smiles_2)
+
+        def _panel(mol, mol_name, fp, fp_name):
+            _heat = iv.importance_heatmap_svg(mol, _cl.cliff_on, fp, width=300, height=220)
+            _strip = iv.strip_svg(mol, _cl.cliff_on, fp, width=300, height=26)
+            return mo.vstack(
+                [
+                    mo.md(f"**{mol_name} - {fp_name}**"),
+                    mo.Html(_heat),
+                    mo.md("*importance-tinted fingerprint*"),
+                    mo.Html(_strip),
+                ]
+            )
+
+        _mt_e = iv.metrics(_cl.cliff_on, "ecfp")
+        _mt_c = iv.metrics(_cl.cliff_on, "chemeleon")
+        _intro = mo.md(
+            f"A RandomForest predicting **{_cl.cliff_on}** pKi "
+            f"(ECFP R² {_mt_e['r2']:.2f} · CheMeleon R² {_mt_c['r2']:.2f}). "
+            f"Green marks where the model leans to make its call. Even with the "
+            f"regions highlighted, the two near-identical molecules light up "
+            f"almost the same - the model has no special signal for the cliff."
+        )
+        _grid = mo.vstack(
+            [
+                mo.hstack(
+                    [_panel(_m1, "molecule 1", "ecfp", "ECFP"),
+                     _panel(_m2, "molecule 2", "ecfp", "ECFP")],
+                    widths=[1, 1], gap=2,
+                ),
+                mo.hstack(
+                    [_panel(_m1, "molecule 1", "chemeleon", "CheMeleon"),
+                     _panel(_m2, "molecule 2", "chemeleon", "CheMeleon")],
+                    widths=[1, 1], gap=2,
+                ),
+            ]
+        )
+        _view = mo.vstack([_intro, _grid])
+    _view
+    return
+
+
+@app.cell
 def _(cliff_choice, ctx, cv, mo, target_pair_choice):
     from fingerprints import pose_view as pv
     from fingerprints.complex_viewer import ComplexViewer

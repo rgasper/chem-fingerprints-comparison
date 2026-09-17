@@ -23,7 +23,7 @@ from fingerprints import classical_explorer as ce
 from fingerprints import chemeleon_fp as chf
 from fingerprints import cliff_view as cv
 from fingerprints import gallery as gal
-from fingerprints import learned_fp_view as lfv
+from fingerprints import importance_view as iv
 from fingerprints import maccs_explorer as mx
 from fingerprints import morgan_explorer as me
 from fingerprints import pose_view as pv
@@ -131,57 +131,27 @@ def exercise_poses():
 check("section 4b poses + interaction FPs", exercise_poses)
 
 
-# --- Section 5: learned-FP grid ------------------------------------------
-def canon(smi):
-    m = Chem.MolFromSmiles(smi)
-    return Chem.MolToSmiles(m) if m else None
+# --- feature-importance views (D3/D4 cliff pair) -------------------------
+def exercise_importance():
+    if not iv.has_data():
+        return
+    eps = iv.endpoints()
+    for tp in ctx.TARGET_PAIRS:
+        if tp.target_a not in eps or tp.target_b not in eps:
+            continue
+        for c in tp.cliffs:
+            for smi in (c.smiles_1, c.smiles_2):
+                mol = Chem.MolFromSmiles(smi)
+                if mol is None:
+                    continue
+                for fp in ("ecfp", "chemeleon"):
+                    iv.atom_importance(mol, c.cliff_on, fp)
+                    iv.importance_heatmap_svg(mol, c.cliff_on, fp, width=200, height=150)
+                    iv.strip_svg(mol, c.cliff_on, fp, width=300, height=26)
+                    iv.metrics(c.cliff_on, fp)
 
 
-def rmse_of(row, key):
-    import math
-
-    m = row.get("rmse_%s_mean" % key)
-    if m is not None:
-        return m
-    sc = (row.get("scatter") or {}).get(key)
-    if not sc:
-        return float("nan")
-    pairs = [
-        (a, p)
-        for a, p in zip(sc["actual"], sc["pred"])
-        if a is not None and p is not None and a == a and p == p
-    ]
-    if len(pairs) < 5:
-        return float("nan")
-    return math.sqrt(sum((a - p) ** 2 for a, p in pairs) / len(pairs))
-
-
-def exercise_learned():
-    for pair in lfv.available_pairs():
-        g = lfv.load_grid(pair)
-        tp = ctx.by_key().get(pair)
-        for row in g["results"]:
-            rmse_of(row, "a")
-            rmse_of(row, "b")
-            sc = row.get("scatter") or {}
-            if "smiles" not in sc:
-                continue
-            # highlight every cliff pick
-            for ci, c in enumerate((tp.cliffs if tp else [])):
-                hi = {}
-                for s, lab in ((c.smiles_1, "molecule 1"), (c.smiles_2, "molecule 2")):
-                    cs = canon(s)
-                    if cs:
-                        hi[cs] = lab
-                fg = 0
-                for i, smi in enumerate(sc["smiles"]):
-                    cs = canon(smi)
-                    if cs in hi:
-                        fg += 1
-                # not asserting fg>0 (train/test split may vary), just no throw
-
-
-check("section 5 learned-FP grid + highlights", exercise_learned)
+check("feature-importance views", exercise_importance)
 
 
 # --- report --------------------------------------------------------------
