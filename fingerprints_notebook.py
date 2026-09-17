@@ -1155,26 +1155,12 @@ def _(current_mol, mo, mol_valid):
 def _(applicable, current_mol, edit_choice, med, mo, mol_valid):
     from rdkit.Chem.Draw import rdMolDraw2D as _draw2d
 
-    from fingerprints import chemeleon_fp as _chf
-    from fingerprints.morgan_explorer import on_bits as _on_bits
-
     def _svg(mol, width=280, height=210):
         d = _draw2d.MolDraw2DSVG(width, height)
         d.drawOptions().addStereoAnnotation = False
         _draw2d.PrepareAndDrawMolecule(d, mol)
         d.FinishDrawing()
         return d.GetDrawingText()
-
-    def _cosine(a, b):
-        va, vb = _chf.fingerprint(a), _chf.fingerprint(b)
-        denom = float((va @ va) ** 0.5 * (vb @ vb) ** 0.5)
-        return float(va @ vb) / denom if denom > 0 else 0.0
-
-    def _tanimoto(a, b):
-        sa, sb = set(_on_bits(a)), set(_on_bits(b))
-        if not sa and not sb:
-            return 1.0
-        return len(sa & sb) / len(sa | sb)
 
     if not mol_valid or not applicable:
         _view = mo.md(
@@ -1190,13 +1176,11 @@ def _(applicable, current_mol, edit_choice, med, mo, mol_valid):
                 kind="info"
             )
         else:
-            # How each fingerprint rates before -> after.
-            _tan = _tanimoto(current_mol, _product)
-            _cos = _cosine(current_mol, _product)
-            _before = set(_on_bits(current_mol))
-            _after = set(_on_bits(_product))
-            _turned_on = len(_after - _before)
-            _turned_off = len(_before - _after)
+            _stats = med.ecfp_diff_stats(current_mol, _product)
+            _ecfp_svg = med.ecfp_diff_svg(current_mol, _product, width=900, height=46)
+            _chem_svg = med.chemeleon_delta_svg(
+                current_mol, _product, width=900, height=110
+            )
 
             _structures = mo.hstack(
                 [
@@ -1213,36 +1197,62 @@ def _(applicable, current_mol, edit_choice, med, mo, mol_valid):
                 justify="center",
                 gap=1,
             )
-            _what = mo.md(
-                f"**{_edit.label}.** {_edit.description}"
-            ).callout(kind="neutral")
+            _what = mo.md(f"**{_edit.label}.** {_edit.description}").callout(
+                kind="neutral"
+            )
 
-            _ecfp_card = mo.md(
-                f"#### ECFP (Morgan)\n\n"
-                f"Tanimoto **{_tan:.2f}**  \n"
-                f"{_turned_on} bits switched **on**, {_turned_off} switched **off** "
-                f"(of a 2048-bit vector)."
-            ).callout(kind="warn" if _tan < 0.85 else "success")
-            _chem_card = mo.md(
-                f"#### CheMeleon (learned)\n\n"
-                f"Cosine **{_cos:.2f}**  \n"
-                f"The learned embedding shifts continuously — no discrete bits to "
-                f"count, just a direction change in 2048-D space."
-            ).callout(kind="warn" if _cos < 0.9 else "success")
+            # ECFP: the bit vector's response, drawn as a diff strip.
+            _ecfp_legend = mo.md(
+                f'ECFP Tanimoto **{_stats["tanimoto"]:.2f}** &nbsp;—&nbsp; '
+                f'<span style="color:#868e96">█ {_stats["shared"]} shared</span> &nbsp; '
+                f'<span style="color:#2f9e44">█ {_stats["added"]} switched on</span> &nbsp; '
+                f'<span style="color:#e03131">█ {_stats["removed"]} switched off</span>'
+            )
+            _ecfp_block = mo.vstack(
+                [
+                    mo.md("**ECFP (Morgan) — which bits flipped?**"),
+                    mo.Html(_ecfp_svg),
+                    _ecfp_legend,
+                ]
+            )
 
-            _reads = mo.hstack([_ecfp_card, _chem_card], widths=[1, 1], gap=2)
+            # CheMeleon: continuous embedding, so show the signed per-dimension
+            # shift for the dimensions that moved most.
+            if _chem_svg is not None:
+                _chem_block = mo.vstack(
+                    [
+                        mo.md(
+                            "**CheMeleon (learned) — which dimensions moved most?**"
+                        ),
+                        mo.Html(_chem_svg),
+                        mo.md(
+                            '<span style="color:#4c6ef5">█ pushed up</span> &nbsp; '
+                            '<span style="color:#e8820c">█ pushed down</span> &nbsp; '
+                            "(top 40 of 2048 dimensions by absolute change — no "
+                            "discrete bits, just a continuous shift)"
+                        ),
+                    ]
+                )
+            else:
+                _chem_block = mo.md(
+                    "*CheMeleon weights unavailable — showing ECFP only.*"
+                ).callout(kind="info")
+
             _view = mo.vstack(
                 [
                     _structures,
                     _what,
-                    _reads,
+                    _ecfp_block,
+                    mo.md(""),
+                    _chem_block,
                     mo.md(
-                        "Try flipping between edits: a **halogen** or **magic "
-                        "methyl** often barely moves either fingerprint, while an "
-                        "**aza-swap** or **bioisostere** can flip far more ECFP bits "
-                        "even though it's chemically 'small'. Neither number knows "
-                        "whether the change matters *biologically* — the recurring "
-                        "theme of this whole notebook."
+                        "Flip between edits and watch the two panels disagree: a "
+                        "**halogen** or **magic methyl** often leaves the strip "
+                        "mostly grey, while an **aza-swap** or **bioisostere** "
+                        "lights up far more — even though the change is chemically "
+                        "'small'. Neither fingerprint knows whether the edit matters "
+                        "*biologically*; each just reports its own chosen notion of "
+                        "similarity."
                     ),
                 ]
             )

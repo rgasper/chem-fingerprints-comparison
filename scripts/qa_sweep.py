@@ -129,6 +129,10 @@ def exercise_mol_edits():
             prod = medits.apply_edit(mol, e.key)
             assert prod is not None, "applicable edit %s returned None" % e.key
             assert prod.GetNumAtoms() > 0
+            # diff visualisations must render without throwing
+            medits.ecfp_diff_stats(mol, prod)
+            medits.ecfp_diff_svg(mol, prod)
+            medits.chemeleon_delta_svg(mol, prod, top_k=40)
         # every edit key against every mol (including invalid) must not throw
         for e in medits.all_edits():
             medits.apply_edit(mol, e.key)
