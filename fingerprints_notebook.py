@@ -210,6 +210,7 @@ def _(bit_slider, current_mol, mo, mol_valid, mx, scrub_bits):
         )
         _view = mo.vstack(
             [
+                mo.md("---"),
                 _header,
                 mo.hstack([_query_panel, _mol_panel], justify="start", gap=2, widths=[1, 2]),
                 mo.md("**Where this bit sits in the whole 166-bit fingerprint:**"),
