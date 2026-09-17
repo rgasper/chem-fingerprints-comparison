@@ -542,15 +542,30 @@ def _(ap_slider, ce, current_mol, mo, mol_valid, topo_slider, tt_slider):
 
 
 @app.cell
-def _(current_mol, mo, mol_valid):
+def _(mo):
+    chemeleon_floor = mo.ui.slider(
+        start=0.1,
+        stop=0.9,
+        step=0.05,
+        value=0.5,
+        label="Structure-sensitivity floor (fraction of this molecule's max)",
+        show_value=True,
+        full_width=True,
+    )
+    return (chemeleon_floor,)
+
+
+@app.cell
+def _(chemeleon_floor, current_mol, mo, mol_valid):
     from fingerprints import chemeleon_fp as chf
 
     # CheMeleon is a *pretrained* neural fingerprint: nobody hand-designed its
     # 2048 dimensions - a message-passing network learned them from large
     # molecular data. Pick a dimension and see which atoms drive it for the
-    # current molecule (the learned analog of the Morgan bit-scrubber).
+    # current molecule (the learned analog of the Morgan bit-scrubber). The
+    # floor knob controls how sensitive a dimension must be to count.
     if mol_valid and current_mol.GetNumAtoms() >= 2:
-        _dims = chf.most_active_dims(current_mol)
+        _dims = chf.most_active_dims(current_mol, floor_frac=chemeleon_floor.value)
     else:
         _dims = [0]
     chemeleon_dim = mo.ui.slider(
@@ -566,7 +581,7 @@ def _(current_mol, mo, mol_valid):
 
 
 @app.cell
-def _(chemeleon_dim, chemeleon_dims, chf, current_mol, mo, mol_valid):
+def _(chemeleon_dim, chemeleon_dims, chemeleon_floor, chf, current_mol, mo, mol_valid):
     # Render the current molecule as a heatmap of one learned dimension's
     # per-atom contributions. Exact decomposition: the graph fingerprint is a
     # mean over atoms, so atom i's share of dimension k is H[i,k]/n_atoms.
@@ -597,6 +612,7 @@ def _(chemeleon_dim, chemeleon_dims, chf, current_mol, mo, mol_valid):
                 mo.md("**Where this dimension sits in the full 2048-long vector:**"),
                 mo.Html(_strip),
                 _strip_legend,
+                chemeleon_floor,
                 chemeleon_dim,
             ]
         )
@@ -635,15 +651,16 @@ $$ s_k \;=\; \max_i h_{i,k} \;-\; \min_i h_{i,k} $$
   encodes something **diffuse/global** and its heatmap would be flat.
 
 The scrubber offers only the **structure-sensitive** dimensions: those whose
-spread clears a relative floor,
+spread clears a relative floor you set with the knob,
 
-$$ s_k \;\ge\; \tfrac{1}{2}\,\max_j s_j $$
+$$ s_k \;\ge\; \phi \cdot \max_j s_j, \qquad \phi \in [0.1,\,0.9] $$
 
-i.e. at least half as sensitive as this molecule's most-sensitive dimension.
-So the *count* of active dimensions varies by molecule (like the on-bit count
-of ECFP/MACCS), and it steps through them **in index order**. The purple strip
-shows each dimension's magnitude $|f_k|$; green ticks mark the structure-
-sensitive dimensions; blue marks the one you're viewing.
+i.e. at least a fraction $\phi$ as sensitive as this molecule's most-sensitive
+dimension (default $\phi = 0.5$). Raise $\phi$ for a stricter, smaller set;
+lower it to include more. Either way the *count* varies by molecule (like the
+on-bit count of ECFP/MACCS), and the scrubber steps through them **in index
+order**. The purple strip shows each dimension's magnitude $|f_k|$; green ticks
+mark the structure-sensitive dimensions; blue marks the one you're viewing.
 
 *Caveat:* this is an honest, exact decomposition of the **mean-pool**, but a
 single learned dimension rarely maps to one human-named substructure the way a
