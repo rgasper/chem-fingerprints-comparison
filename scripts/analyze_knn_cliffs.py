@@ -55,6 +55,9 @@ ENDPOINTS = {
 }
 K_GRID = [1, 2, 3, 5, 8, 12, 20, 30, 50, 75, 100]
 N_NEIGHBORS = 4  # neighbours to record per cliff molecule
+SIM_THRESHOLD = 0.7  # "structurally similar" cutoff for the smoothness stat
+FLAT_GAP = 1.0  # |dpKi| below this = a flat (smooth) pair
+CLIFF_GAP = 2.0  # |dpKi| above this = an activity cliff
 
 
 def load_endpoint(dataset: str):
@@ -113,6 +116,35 @@ def analyse_endpoint(label: str, dataset: str) -> dict:
     te = split == "test"
     Xtr, ytr = X[tr], y[tr]
     Xte, yte = X[te], y[te]
+
+    # --- smoothness census: among structurally similar pairs, how many are
+    #     flat vs cliffs? This is the load-bearing evidence for *why any*
+    #     structure-only model must default to 'similar structure -> similar
+    #     activity': that assumption holds for the vast majority of similar
+    #     pairs, so honouring the rare cliff would wreck accuracy everywhere. ---
+    S_all = tanimoto(X, X)
+    n = len(smis)
+    iu = np.triu_indices(n, 1)
+    tt = S_all[iu]
+    dd = np.abs(y[iu[0]] - y[iu[1]])
+    sim_mask = tt >= SIM_THRESHOLD
+    n_similar = int(sim_mask.sum())
+    dd_sim = dd[sim_mask]
+    # histogram of activity gaps among similar pairs (for the visual)
+    gap_edges = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 10.0]
+    gap_hist = []
+    for lo, hi in zip(gap_edges[:-1], gap_edges[1:]):
+        c = int(np.sum((dd_sim >= lo) & (dd_sim < hi)))
+        gap_hist.append({"lo": lo, "hi": hi, "count": c})
+    smoothness = {
+        "sim_threshold": SIM_THRESHOLD,
+        "n_similar_pairs": n_similar,
+        "frac_flat": float(np.mean(dd_sim < FLAT_GAP)) if n_similar else 0.0,
+        "frac_cliff": float(np.mean(dd_sim > CLIFF_GAP)) if n_similar else 0.0,
+        "flat_gap": FLAT_GAP,
+        "cliff_gap": CLIFF_GAP,
+        "gap_hist": gap_hist,
+    }
 
     # --- held-out R^2 vs k (test molecules predicted from train neighbours) ---
     S_te_tr = tanimoto(Xte, Xtr)
@@ -173,6 +205,7 @@ def analyse_endpoint(label: str, dataset: str) -> dict:
         "n_total": int(len(smis)),
         "n_train": int(tr.sum()),
         "n_test": int(te.sum()),
+        "smoothness": smoothness,
         "k_curve": k_curve,
         "cliff_pairs": pairs_out,
     }

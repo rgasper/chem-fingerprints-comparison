@@ -151,6 +151,7 @@ def exercise_knn():
     for ep in knn.endpoints():
         knn.k_curve(ep)
         knn.endpoint_meta(ep)
+        knn.smoothness(ep)
         knn.best_k(ep)
         for i in range(6):
             p = knn.cliff_pair(ep, i)

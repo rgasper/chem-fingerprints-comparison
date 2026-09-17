@@ -43,6 +43,17 @@ def endpoint_meta(endpoint: str) -> dict:
     return {"n_total": ep["n_total"], "n_train": ep["n_train"], "n_test": ep["n_test"]}
 
 
+def smoothness(endpoint: str) -> dict:
+    """The 'why any structure-only model must be smooth' census for an endpoint.
+
+    Shape: {sim_threshold, n_similar_pairs, frac_flat, frac_cliff, flat_gap,
+    cliff_gap, gap_hist:[{lo,hi,count}]}. Among all molecule pairs that are
+    structurally similar (Tanimoto >= sim_threshold), what fraction are flat
+    (|dpKi| < flat_gap) vs cliffs (|dpKi| > cliff_gap).
+    """
+    return _data()["endpoints"][endpoint]["smoothness"]
+
+
 def cliff_pair(endpoint: str, index: int) -> dict | None:
     """The analysis record for one curated cliff pair, or None if not present.
 

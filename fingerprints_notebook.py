@@ -910,9 +910,89 @@ def _(mo):
 
 
 @app.cell
-def _(mo):
+def _(alt, cliff_choice, ctx, mo, pd, target_pair_choice):
     from fingerprints import knn_view as knn
 
+    # The general impossibility argument, made concrete. Any structure-only
+    # model is effectively a *smooth* function of the fingerprint: similar
+    # fingerprint -> similar predicted activity. This census shows WHY that
+    # assumption is forced - among structurally similar pairs, the overwhelming
+    # majority really are flat, so a model must default to smooth to be
+    # accurate, and the rare cliff is collateral damage.
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _idx = cliff_choice.value
+    _cliff_ep = _tp.cliffs[_idx].cliff_on if _tp.cliffs else None
+    _eps = knn.endpoints() if knn.has_data() else []
+
+    if _cliff_ep not in _eps:
+        _view = mo.md(
+            "*This census was precomputed for the **Dopamine D3/D4** datasets — "
+            "pick that pair above.*"
+        ).callout(kind="info")
+    else:
+        _s = knn.smoothness(_cliff_ep)
+        _hist = pd.DataFrame(
+            [
+                {
+                    "gap": f"{h['lo']:.1f}–{h['hi']:.1f}" if h["hi"] < 10 else f"{h['lo']:.1f}+",
+                    "lo": h["lo"],
+                    "count": h["count"],
+                    "kind": (
+                        "flat" if h["hi"] <= _s["flat_gap"]
+                        else "cliff" if h["lo"] >= _s["cliff_gap"]
+                        else "middle"
+                    ),
+                }
+                for h in _s["gap_hist"]
+            ]
+        )
+        _chart = (
+            alt.Chart(_hist)
+            .mark_bar()
+            .encode(
+                x=alt.X("gap:N", sort=alt.SortField("lo"),
+                        title="activity gap between the pair (|ΔpKi|, log units)"),
+                y=alt.Y("count:Q", title="number of similar pairs",
+                        scale=alt.Scale(type="symlog")),
+                color=alt.Color(
+                    "kind:N",
+                    scale=alt.Scale(
+                        domain=["flat", "middle", "cliff"],
+                        range=["#2b8a3e", "#adb5bd", "#e03131"],
+                    ),
+                    legend=alt.Legend(title=None, orient="top"),
+                ),
+                tooltip=["gap:N", "count:Q"],
+            )
+            .properties(height=220)
+        )
+        _flat_pct = round(_s["frac_flat"] * 100)
+        _cliff_pct = _s["frac_cliff"] * 100
+        _ratio = round(_s["frac_flat"] / max(_s["frac_cliff"], 1e-9))
+        _msg = mo.md(
+            f"**The impossibility, in one chart.** Take every pair of {_cliff_ep} "
+            f"molecules that a fingerprint calls *similar* (Tanimoto ≥ "
+            f"{_s['sim_threshold']:.1f}): **{_s['n_similar_pairs']:,}** pairs. "
+            f"**{_flat_pct}%** of them are **flat** (activity within "
+            f"{_s['flat_gap']:.0f} log unit) and only **{_cliff_pct:.1f}%** are "
+            f"true cliffs — roughly **{_ratio}:1**.\n\n"
+            f"So 'similar structure → similar activity' is *right the vast majority "
+            f"of the time*. Any model that predicts from structure alone is "
+            f"rewarded for assuming it — and a model that instead predicted big "
+            f"activity jumps for near-identical structures would be wrong on those "
+            f"{_flat_pct}% to catch the {_cliff_pct:.1f}%. **A cliff is where nature "
+            f"breaks the very assumption that makes the fingerprint useful.** No "
+            f"amount of model cleverness recovers information the structure encoding "
+            f"never contained — which is why activity cliffs are a well-documented "
+            f"hard limit in QSAR, not a modelling bug."
+        ).callout(kind="danger")
+        _view = mo.vstack([_msg, mo.as_html(_chart)])
+    mo.vstack([_view, mo.md("---")])
+    return (knn,)
+
+
+@app.cell
+def _(knn, mo):
     # The only knob kNN has is neighbourhood size k - the honest analog of
     # "move the decision boundary". Top-level so the section reacts to it.
     _grid = knn.k_grid() if knn.has_data() else [1, 5, 20]
@@ -923,7 +1003,7 @@ def _(mo):
         show_value=True,
         full_width=True,
     )
-    return k_slider, knn
+    return (k_slider,)
 
 
 @app.cell
