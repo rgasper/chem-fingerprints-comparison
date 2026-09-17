@@ -634,10 +634,16 @@ $$ s_k \;=\; \max_i h_{i,k} \;-\; \min_i h_{i,k} $$
 - **Small $s_k$:** every atom contributes about the same, so the dimension
   encodes something **diffuse/global** and its heatmap would be flat.
 
-The scrubber selects the dimensions with the largest $s_k$ (the ones worth
-looking at) and steps through them **in index order**. The purple strip shows
-each dimension's magnitude $|f_k|$; green ticks mark the structure-sensitive
-dimensions; blue marks the one you're viewing.
+The scrubber offers only the **structure-sensitive** dimensions: those whose
+spread clears a relative floor,
+
+$$ s_k \;\ge\; \tfrac{1}{2}\,\max_j s_j $$
+
+i.e. at least half as sensitive as this molecule's most-sensitive dimension.
+So the *count* of active dimensions varies by molecule (like the on-bit count
+of ECFP/MACCS), and it steps through them **in index order**. The purple strip
+shows each dimension's magnitude $|f_k|$; green ticks mark the structure-
+sensitive dimensions; blue marks the one you're viewing.
 
 *Caveat:* this is an honest, exact decomposition of the **mean-pool**, but a
 single learned dimension rarely maps to one human-named substructure the way a

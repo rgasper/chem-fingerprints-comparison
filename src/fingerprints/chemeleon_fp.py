@@ -136,7 +136,7 @@ def dim_sensitivity(mol: Chem.Mol) -> np.ndarray:
     return H.max(axis=0) - H.min(axis=0)
 
 
-def most_active_dims(mol: Chem.Mol, *, floor_frac: float = 0.25) -> list[int]:
+def most_active_dims(mol: Chem.Mol, *, floor_frac: float = 0.5) -> list[int]:
     """Structure-sensitive dimensions worth scrubbing, in ascending index order.
 
     A dimension qualifies when its sensitivity ``s_k`` (see ``dim_sensitivity``)
