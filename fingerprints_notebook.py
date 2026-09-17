@@ -529,6 +529,65 @@ def _(ap_slider, ce, current_mol, mo, mol_valid, topo_slider, tt_slider):
 
 @app.cell
 def _(mo):
+    from fingerprints import learned_fp_view as lfv
+
+    _eps = lfv.list_endpoints()
+    learned_endpoint = mo.ui.dropdown(
+        options={e["label"]: (e["pair_key"], e["side"]) for e in _eps},
+        value=_eps[0]["label"] if _eps else None,
+        label="Endpoint the model learned to predict",
+    )
+    learned_endpoint
+    return learned_endpoint, lfv
+
+
+@app.cell
+def _(alt, learned_endpoint, lfv, mo, pd):
+    # A learned fingerprint: instead of us choosing the features (MACCS keys,
+    # Morgan environments), a graph neural network reads the raw molecular graph
+    # and learns its own vector, tuned to predict activity. Here we just show it
+    # works - held-out predicted vs. measured pKi for the chosen endpoint.
+    if learned_endpoint.value is None:
+        _view = mo.md(
+            "*No trained model found. Run "
+            "`uv run python scripts/train_alpha_grid.py`.*"
+        ).callout(kind="warn")
+    else:
+        _pk, _side = learned_endpoint.value
+        _d = lfv.predicted_vs_measured(_pk, _side)
+        if _d["n"] < 5:
+            _view = mo.md(f"*Not enough held-out data for {_d['label']}.*")
+        else:
+            _pts = pd.DataFrame({"measured": _d["actual"], "predicted": _d["pred"]})
+            _lo = float(min(_pts.min().min(), _pts.min().min())) - 0.3
+            _hi = float(max(_pts.max().max(), _pts.max().max())) + 0.3
+            _diag = (
+                alt.Chart(pd.DataFrame({"x": [_lo, _hi], "y": [_lo, _hi]}))
+                .mark_line(color="#adb5bd", strokeDash=[4, 4])
+                .encode(x="x:Q", y="y:Q")
+            )
+            _sc = (
+                alt.Chart(_pts)
+                .mark_circle(size=45, opacity=0.45, color="#1c7ed6")
+                .encode(
+                    x=alt.X("measured:Q", title="measured pKi", scale=alt.Scale(domain=[_lo, _hi])),
+                    y=alt.Y("predicted:Q", title="predicted pKi", scale=alt.Scale(domain=[_lo, _hi])),
+                    tooltip=["measured:Q", "predicted:Q"],
+                )
+            )
+            _stat = mo.md(
+                f"**{_d['label']}** - a D-MPNN's *learned* fingerprint, held-out "
+                f"predictions on **{_d['n']}** molecules  \n"
+                f"RMSE **{_d['rmse']:.2f}** pKi  ·  R² **{_d['r2']:.2f}**  "
+                f"(points near the dashed line = accurate)"
+            )
+            _view = mo.vstack([_stat, mo.as_html((_diag + _sc).properties(height=340, width=360))])
+    _view
+    return
+
+
+@app.cell
+def _(mo):
     from fingerprints.data import context_cliffs as ctx
 
     target_pair_choice = mo.ui.dropdown(
@@ -866,258 +925,6 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
                     "bits — even this data-derived fingerprint doesn't obviously "
                     "explain the potency gap.*"
                 ),
-            ]
-        )
-    _view
-    return
-
-
-@app.cell
-def _(mo):
-    alpha_knob = mo.ui.slider(
-        start=0.0,
-        stop=1.0,
-        step=0.25,
-        value=0.5,
-        label="α — loss weight toward the first endpoint (← second · first →)",
-        show_value=True,
-        full_width=True,
-    )
-    alpha_knob
-    return (alpha_knob,)
-
-
-@app.cell
-def _(alpha_knob, alt, cliff_choice, ctx, mo, pd, target_pair_choice):
-    from fingerprints import learned_fp_view as lfv
-
-    # Follow the target-pair picker from Section 4; fall back to any trained grid
-    # if the selected pair hasn't been trained yet.
-    _sel = ctx.by_key()[target_pair_choice.value].key
-    if lfv.has_grid(_sel):
-        _pair = _sel
-    elif lfv.available_pairs():
-        _pair = lfv.available_pairs()[0]
-    else:
-        _pair = None
-    if _pair is None:
-        _view = mo.md(
-            "*No trained α-grid found. Run "
-            "`uv run python scripts/train_alpha_grid.py` to generate it.*"
-        ).callout(kind="warn")
-    else:
-        _g = lfv.load_grid(_pair)
-        _ta, _tb = _g["target_a"], _g["target_b"]
-        _res = {r["alpha"]: r for r in _g["results"]}
-        _cur = _res.get(alpha_knob.value, _g["results"][len(_g["results"]) // 2])
-        _note = (
-            ""
-            if _pair == _sel
-            else f"  \n*(showing {_ta} vs {_tb} — the picked pair isn't trained yet)*"
-        )
-
-        # RMSE per endpoint for a grid row. Prefer the cached mean-over-seeds;
-        # if an older cache lacks it, fall back to computing from the seed-0
-        # scatter so the notebook never KeyErrors while the grid is regenerating.
-        def _rmse_of(row, key):
-            _mean = row.get(f"rmse_{key}_mean")
-            if _mean is not None:
-                return _mean
-            sc = (row.get("scatter") or {}).get(key)
-            if not sc:
-                return float("nan")
-            import math
-
-            _pairs = [
-                (a, p)
-                for a, p in zip(sc["actual"], sc["pred"])
-                if a is not None and p is not None and a == a and p == p
-            ]
-            if len(_pairs) < 5:
-                return float("nan")
-            return math.sqrt(
-                sum((a - p) ** 2 for a, p in _pairs) / len(_pairs)
-            )
-
-        # Two big RMSE readouts for the current alpha (lower is better, pKi
-        # units). alpha weights the FIRST endpoint (task A); 1-alpha the second.
-        def _card(target, rmse):
-            if rmse != rmse:  # NaN
-                return mo.md(f"#### {target}\n\ntest RMSE = **n/a**").callout(
-                    kind="neutral"
-                )
-            _kind = "success" if rmse < 0.8 else ("danger" if rmse > 1.2 else "neutral")
-            _verdict = "learns it" if rmse < 0.8 else (
-                "fails" if rmse > 1.2 else "partial"
-            )
-            return mo.md(
-                f"#### {target}\n\ntest RMSE = **{rmse:.2f}** pKi — {_verdict}"
-            ).callout(kind=_kind)
-
-        _readout = mo.hstack(
-            [
-                _card(f"{_ta}  (α = {alpha_knob.value})", _rmse_of(_cur, "a")),
-                _card(f"{_tb}  (1−α = {round(1 - alpha_knob.value, 2)})", _rmse_of(_cur, "b")),
-            ],
-            widths=[1, 1],
-            gap=2,
-        )
-
-        # Trade-off curve: RMSE on each endpoint across the whole alpha grid,
-        # with the current alpha marked. Lower is better.
-        _rows = []
-        for r in _g["results"]:
-            _rows.append({"alpha": r["alpha"], "RMSE": _rmse_of(r, "a"), "endpoint": _ta})
-            _rows.append({"alpha": r["alpha"], "RMSE": _rmse_of(r, "b"), "endpoint": _tb})
-        _df = pd.DataFrame(_rows).dropna()
-        _ymax = float(_df["RMSE"].max()) * 1.1 if not _df.empty else 2.0
-        _line = (
-            alt.Chart(_df)
-            .mark_line(point=True)
-            .encode(
-                x=alt.X("alpha:Q", title="α (loss weight toward the first endpoint)"),
-                y=alt.Y(
-                    "RMSE:Q",
-                    title="test RMSE (pKi) — lower is better",
-                    scale=alt.Scale(domain=[0, _ymax]),
-                ),
-                color=alt.Color("endpoint:N", title=None),
-            )
-            .properties(height=240, width=440)
-        )
-        _rule = (
-            alt.Chart(pd.DataFrame({"alpha": [alpha_knob.value]}))
-            .mark_rule(color="#868e96", strokeDash=[4, 4])
-            .encode(x="alpha:Q")
-        )
-        _tradeoff = mo.as_html(_line + _rule)
-
-        # Endpoint-vs-endpoint view: plot endpoint A pKi (x) against endpoint B
-        # pKi (y). Each molecule shows a MEASURED mark (filled circle) and a
-        # PREDICTED mark (hollow diamond) joined by a line; the picked cliff pair
-        # is highlighted while everything else fades back. This makes the cliff
-        # tangible: two molecules that sit almost on top of each other in one
-        # axis but far apart in the other — and whether the model can follow.
-        from rdkit import Chem as _Chem
-
-        def _canon(smi):
-            _m = _Chem.MolFromSmiles(smi)
-            return _Chem.MolToSmiles(_m) if _m else None
-
-        def _endpoint_vs_endpoint():
-            sc = _cur.get("scatter") or {}
-            if "smiles" not in sc:
-                return mo.md(
-                    "*Per-molecule endpoint–endpoint data isn't in this cache yet — "
-                    "re-run `scripts/train_alpha_grid.py`.*"
-                ).callout(kind="info")
-
-            # SMILES of the two molecules in the currently-picked cliff, so we can
-            # spotlight them among all the faded background molecules. Only do this
-            # when the grid we loaded matches the picked pair (otherwise the cliff
-            # SMILES won't be among this grid's molecules).
-            _tp = ctx.by_key()[target_pair_choice.value]
-            _cl = (
-                _tp.cliffs[cliff_choice.value]
-                if _pair == _sel and cliff_choice.value < len(_tp.cliffs)
-                else None
-            )
-            _hi_map = {}
-            if _cl is not None:
-                _c1, _c2 = _canon(_cl.smiles_1), _canon(_cl.smiles_2)
-                if _c1:
-                    _hi_map[_c1] = "molecule 1"
-                if _c2:
-                    _hi_map[_c2] = "molecule 2"
-
-            _rows = []
-            for _i, _smi in enumerate(sc["smiles"]):
-                _cs = _canon(_smi)
-                _grp = _hi_map.get(_cs, "other molecules")
-                _aa, _ab = sc["actual_a"][_i], sc["actual_b"][_i]
-                _pa, _pb = sc["pred_a"][_i], sc["pred_b"][_i]
-                # Measured mark only if BOTH endpoints are labeled.
-                if _aa is not None and _ab is not None and _aa == _aa and _ab == _ab:
-                    _rows.append({"x": _aa, "y": _ab, "src": "measured", "grp": _grp})
-                if _pa is not None and _pb is not None and _pa == _pa and _pb == _pb:
-                    _rows.append({"x": _pa, "y": _pb, "src": "predicted", "grp": _grp})
-            _pts = pd.DataFrame(_rows)
-            if _pts.empty:
-                return mo.md("*No molecules with labels to plot.*")
-
-            _bg = _pts[_pts["grp"] == "other molecules"]
-            _fg = _pts[_pts["grp"] != "other molecules"]
-
-            _base = alt.Chart(_bg)
-            _x = alt.X(f"x:Q", title=f"{_ta} pKi")
-            _y = alt.Y(f"y:Q", title=f"{_tb} pKi")
-            _shape = alt.Shape(
-                "src:N",
-                title=None,
-                scale=alt.Scale(
-                    domain=["measured", "predicted"], range=["circle", "diamond"]
-                ),
-            )
-            # Faded background cloud.
-            _cloud = _base.mark_point(opacity=0.12, size=35, color="#868e96").encode(
-                x=_x, y=_y, shape=_shape
-            )
-            _layers = [_cloud]
-            if not _fg.empty:
-                _color = alt.Color(
-                    "grp:N",
-                    title=None,
-                    scale=alt.Scale(
-                        domain=["molecule 1", "molecule 2"],
-                        range=["#1c7ed6", "#e8590c"],
-                    ),
-                )
-                # A line linking each highlighted molecule's measured->predicted
-                # marks, to show how far the model's guess drifts.
-                _link = (
-                    alt.Chart(_fg)
-                    .mark_line(opacity=0.5)
-                    .encode(x=_x, y=_y, color=_color, detail="grp:N")
-                )
-                _marks = (
-                    alt.Chart(_fg)
-                    .mark_point(size=170, filled=False, strokeWidth=2.5)
-                    .encode(
-                        x=_x,
-                        y=_y,
-                        shape=_shape,
-                        color=_color,
-                        tooltip=["grp:N", "src:N", "x:Q", "y:Q"],
-                    )
-                )
-                _layers += [_link, _marks]
-            return mo.as_html(
-                alt.layer(*_layers).properties(height=380, width=440)
-            )
-
-        _scatters = _endpoint_vs_endpoint()
-        _caption = mo.md(
-            f"The whole plot is the two-endpoint space: **{_ta} pKi** across, "
-            f"**{_tb} pKi** up. Each molecule appears as **● measured** and "
-            f"**◇ predicted**, joined by a line. The "
-            f"<span style='color:#1c7ed6'>**molecule 1**</span> / "
-            f"<span style='color:#e8590c'>**molecule 2**</span> marks are the cliff "
-            f"pair you picked above — near-identical structures that sit far apart on "
-            f"one axis. The gap between a molecule's ● and ◇ is how far the learned "
-            f"fingerprint's guess drifted from the truth. (Measured marks need both "
-            f"endpoints assayed; the picked cliff molecules usually sit in the "
-            f"model's *training* split — scaffold-splitting keeps their shared "
-            f"scaffold together — so their predictions are optimistic, but their "
-            f"*position* still shows the cliff.)"
-        )
-        _view = mo.vstack(
-            [
-                mo.md(_note) if _note else mo.md(""),
-                _readout,
-                _scatters,
-                _caption,
-                mo.md("**How each endpoint's accuracy trades off as you move α:**"),
-                _tradeoff,
             ]
         )
     _view
