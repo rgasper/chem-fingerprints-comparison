@@ -528,60 +528,53 @@ def _(ap_slider, ce, current_mol, mo, mol_valid, topo_slider, tt_slider):
 
 
 @app.cell
-def _(mo):
-    from fingerprints import learned_fp_view as lfv
+def _(current_mol, mo, mol_valid):
+    from fingerprints import chemeleon_fp as chf
 
-    _eps = lfv.list_endpoints()
-    learned_endpoint = mo.ui.dropdown(
-        options={e["label"]: (e["pair_key"], e["side"]) for e in _eps},
-        value=_eps[0]["label"] if _eps else None,
-        label="Endpoint the model learned to predict",
+    # CheMeleon is a *pretrained* neural fingerprint: nobody hand-designed its
+    # 2048 dimensions - a message-passing network learned them from large
+    # molecular data. Pick a dimension and see which atoms drive it for the
+    # current molecule (the learned analog of the Morgan bit-scrubber).
+    if mol_valid and current_mol.GetNumAtoms() >= 2:
+        _dims = chf.most_active_dims(current_mol, k=40)
+    else:
+        _dims = [0]
+    chemeleon_dim = mo.ui.slider(
+        start=0,
+        stop=max(len(_dims) - 1, 0),
+        value=0,
+        label=f"Scrub the {len(_dims)} most structure-sensitive dimensions",
+        full_width=True,
+        show_value=False,
     )
-    learned_endpoint
-    return learned_endpoint, lfv
+    chemeleon_dims = _dims
+    return chemeleon_dim, chemeleon_dims, chf
 
 
 @app.cell
-def _(alt, learned_endpoint, lfv, mo, pd):
-    # A learned fingerprint: instead of us choosing the features (MACCS keys,
-    # Morgan environments), a graph neural network reads the raw molecular graph
-    # and learns its own vector, tuned to predict activity. Here we just show it
-    # works - held-out predicted vs. measured pKi for the chosen endpoint.
-    if learned_endpoint.value is None:
-        _view = mo.md(
-            "*No trained model found. Run "
-            "`uv run python scripts/train_alpha_grid.py`.*"
-        ).callout(kind="warn")
+def _(chemeleon_dim, chemeleon_dims, chf, current_mol, mo, mol_valid):
+    # Render the current molecule as a heatmap of one learned dimension's
+    # per-atom contributions. Exact decomposition: the graph fingerprint is a
+    # mean over atoms, so atom i's share of dimension k is H[i,k]/n_atoms.
+    if not mol_valid:
+        _view = mo.md("*Select a valid molecule.*")
     else:
-        _pk, _side = learned_endpoint.value
-        _d = lfv.predicted_vs_measured(_pk, _side)
-        if _d["n"] < 5:
-            _view = mo.md(f"*Not enough held-out data for {_d['label']}.*")
-        else:
-            _pts = pd.DataFrame({"measured": _d["actual"], "predicted": _d["pred"]})
-            _lo = float(min(_pts.min().min(), _pts.min().min())) - 0.3
-            _hi = float(max(_pts.max().max(), _pts.max().max())) + 0.3
-            _diag = (
-                alt.Chart(pd.DataFrame({"x": [_lo, _hi], "y": [_lo, _hi]}))
-                .mark_line(color="#adb5bd", strokeDash=[4, 4])
-                .encode(x="x:Q", y="y:Q")
-            )
-            _sc = (
-                alt.Chart(_pts)
-                .mark_circle(size=45, opacity=0.45, color="#1c7ed6")
-                .encode(
-                    x=alt.X("measured:Q", title="measured pKi", scale=alt.Scale(domain=[_lo, _hi])),
-                    y=alt.Y("predicted:Q", title="predicted pKi", scale=alt.Scale(domain=[_lo, _hi])),
-                    tooltip=["measured:Q", "predicted:Q"],
-                )
-            )
-            _stat = mo.md(
-                f"**{_d['label']}** - a D-MPNN's *learned* fingerprint, held-out "
-                f"predictions on **{_d['n']}** molecules  \n"
-                f"RMSE **{_d['rmse']:.2f}** pKi  ·  R² **{_d['r2']:.2f}**  "
-                f"(points near the dashed line = accurate)"
-            )
-            _view = mo.vstack([_stat, mo.as_html((_diag + _sc).properties(height=340, width=360))])
+        _dim = chemeleon_dims[min(chemeleon_dim.value, len(chemeleon_dims) - 1)]
+        _svg = chf.heatmap_svg(current_mol, _dim, width=460, height=340)
+        _card = mo.md(
+            f"### CheMeleon dimension {_dim}\n\n"
+            f"A **pretrained, learned** fingerprint — nobody chose these features.\n\n"
+            f"<span style='color:#2b8a3e'>● green</span> atoms push this dimension "
+            f"up, <span style='color:#c2255c'>● pink</span> push it down. This is an "
+            f"*estimated* read of what the dimension keys on for this molecule — "
+            f"not a fixed substructure like a Morgan bit."
+        )
+        _view = mo.vstack(
+            [
+                chemeleon_dim,
+                mo.hstack([mo.Html(_svg), _card], justify="start", gap=2, widths=[3, 2]),
+            ]
+        )
     _view
     return
 

@@ -20,6 +20,7 @@ import traceback
 from rdkit import Chem
 
 from fingerprints import classical_explorer as ce
+from fingerprints import chemeleon_fp as chf
 from fingerprints import cliff_view as cv
 from fingerprints import gallery as gal
 from fingerprints import learned_fp_view as lfv
@@ -86,6 +87,12 @@ def exercise_mol(smi):
                 hit = ce.bit_hit(mol, key, b)
                 ce.highlight_svg(mol, hit, width=200, height=150)
                 ce.fingerprint_strip_svg(mol, key, b, width=300, height=30)
+        # CheMeleon learned fingerprint + per-dimension heatmap
+        chf.fingerprint(mol)
+        dims = chf.most_active_dims(mol, k=5)
+        for dm in dims[:3]:
+            chf.atom_contributions(mol, dm)
+            chf.heatmap_svg(mol, dm, width=200, height=150)
 
 
 for smi in ALL_SMILES:
