@@ -118,18 +118,94 @@ class DimInfo:
     top_atom: int  # atom contributing most (abs)
 
 
-def most_active_dims(mol: Chem.Mol, k: int = 40) -> list[int]:
-    """Embedding dimensions with the largest spread of per-atom contributions -
-    i.e. the ones where *which atom you're looking at* matters most, so the
-    heatmap is interesting. Returns dim indices, most-varying first."""
+def dim_sensitivity(mol: Chem.Mol) -> np.ndarray:
+    """Per-dimension **structure-sensitivity**: how much a dimension's per-atom
+    contribution varies across the molecule's atoms.
+
+    For dimension k, with per-atom hidden values H[i, k], we use the spread
+
+        s_k = max_i H[i, k] - min_i H[i, k]
+
+    A large s_k means different atoms push dimension k very differently - the
+    dimension is reading a *local* structural feature, so a heatmap of it is
+    informative. A small s_k means every atom contributes about the same, so
+    the dimension encodes something diffuse/global and its heatmap is flat.
+    Returns a (EMBED_DIM,) array.
+    """
     H = atom_hidden(mol)
-    spread = H.max(axis=0) - H.min(axis=0)
+    return H.max(axis=0) - H.min(axis=0)
+
+
+def most_active_dims(mol: Chem.Mol, k: int = 40) -> list[int]:
+    """The ``k`` most structure-sensitive dimensions, **returned in ascending
+    index order** so a slider scrubbing them moves left-to-right through the
+    vector in a sensible way. (Selection is by sensitivity; order is by index.)"""
+    spread = dim_sensitivity(mol)
     order = np.argsort(spread)[::-1]
     # Keep only dims that actually vary across atoms (skip flat/padding dims);
     # fall back to the raw order if a tiny molecule has none.
     varying = [int(d) for d in order if spread[d] > 1e-6]
     picked = varying[:k] if varying else [int(d) for d in order[:k]]
-    return picked
+    return sorted(picked)
+
+
+def strip_svg(
+    mol: Chem.Mol,
+    current_dim: int,
+    *,
+    active_dims: list[int] | None = None,
+    width: int = 920,
+    height: int = 40,
+) -> str:
+    """The dense 2048-dim CheMeleon vector as a strip: each dimension's cell is
+    shaded by |fingerprint[k]| (how strongly this molecule activates it). The
+    currently-selected dimension is marked blue; the structure-sensitive
+    dimensions the scrubber visits are ticked green underneath.
+
+    Unlike the Morgan strip (sparse 0/1 bits), CheMeleon dimensions are
+    continuous, so we encode *magnitude* rather than on/off.
+    """
+    fp = np.abs(fingerprint(mol))
+    mx = float(fp.max()) or 1.0
+    active = set(active_dims or [])
+    pad = 2
+    inner_w = width - 2 * pad
+    band_h = height - 2 * pad
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}">',
+        f'<rect x="{pad}" y="{pad}" width="{inner_w}" height="{band_h}" '
+        f'fill="#f1f3f5" stroke="#dee2e6" stroke-width="0.5" />',
+    ]
+    tick_w = max(inner_w / EMBED_DIM, 0.6)
+    # Value-magnitude shading across all dims.
+    for k in range(EMBED_DIM):
+        frac = fp[k] / mx
+        if frac <= 0.02:
+            continue
+        x = pad + (k / EMBED_DIM) * inner_w
+        alpha = 0.12 + 0.88 * min(frac, 1.0)
+        parts.append(
+            f'<rect x="{x:.2f}" y="{pad}" width="{max(tick_w, 1.0):.2f}" '
+            f'height="{band_h * 0.7:.1f}" fill="#7048e8" fill-opacity="{alpha:.2f}" />'
+        )
+    # Green ticks for the structure-sensitive dims the scrubber can visit.
+    for k in active:
+        x = pad + (k / EMBED_DIM) * inner_w
+        parts.append(
+            f'<rect x="{x:.2f}" y="{pad + band_h * 0.72:.1f}" '
+            f'width="{max(tick_w, 1.5):.2f}" height="{band_h * 0.28:.1f}" '
+            f'fill="#2f9e44" />'
+        )
+    # Current dimension: full-height blue marker on top.
+    cx = pad + (current_dim / EMBED_DIM) * inner_w
+    cw = max(tick_w, 4.0)
+    parts.append(
+        f'<rect x="{cx - cw / 2:.2f}" y="0" width="{cw:.2f}" height="{height}" '
+        f'fill="#1c7ed6" />'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
 
 
 def heatmap_svg(mol: Chem.Mol, dim: int, *, width: int = 460, height: int = 340) -> str:

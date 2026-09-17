@@ -89,7 +89,9 @@ def exercise_mol(smi):
                 ce.fingerprint_strip_svg(mol, key, b, width=300, height=30)
         # CheMeleon learned fingerprint + per-dimension heatmap
         chf.fingerprint(mol)
+        chf.dim_sensitivity(mol)
         dims = chf.most_active_dims(mol, k=5)
+        chf.strip_svg(mol, dims[0] if dims else 0, active_dims=dims, width=300, height=30)
         for dm in dims[:3]:
             chf.atom_contributions(mol, dm)
             chf.heatmap_svg(mol, dm, width=200, height=150)

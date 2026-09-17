@@ -557,7 +557,7 @@ def _(current_mol, mo, mol_valid):
         start=0,
         stop=max(len(_dims) - 1, 0),
         value=0,
-        label=f"Scrub the {len(_dims)} most structure-sensitive dimensions",
+        label=f"Scrub {len(_dims)} structure-sensitive dimensions (by index)",
         full_width=True,
         show_value=False,
     )
@@ -575,6 +575,14 @@ def _(chemeleon_dim, chemeleon_dims, chf, current_mol, mo, mol_valid):
     else:
         _dim = chemeleon_dims[min(chemeleon_dim.value, len(chemeleon_dims) - 1)]
         _svg = chf.heatmap_svg(current_mol, _dim, width=460, height=340)
+        _strip = chf.strip_svg(
+            current_mol, _dim, active_dims=chemeleon_dims, width=920, height=40
+        )
+        _strip_legend = mo.md(
+            '<span style="color:#7048e8">█ dimension magnitude |fₖ|</span> &nbsp; '
+            '<span style="color:#2f9e44">█ structure-sensitive (scrubbable)</span> &nbsp; '
+            '<span style="color:#1c7ed6">█ selected dimension</span>'
+        )
         _card = mo.md(
             f"### CheMeleon dimension {_dim}\n\n"
             f"A **pretrained, learned** fingerprint — nobody chose these features.\n\n"
@@ -586,10 +594,58 @@ def _(chemeleon_dim, chemeleon_dims, chf, current_mol, mo, mol_valid):
         _view = mo.vstack(
             [
                 mo.hstack([mo.Html(_svg), _card], justify="start", gap=2, widths=[3, 2]),
+                mo.md("**Where this dimension sits in the full 2048-long vector:**"),
+                mo.Html(_strip),
+                _strip_legend,
                 chemeleon_dim,
             ]
         )
     mo.vstack([_view, mo.md("---")])
+    return
+
+
+@app.cell
+def _(mo):
+    mo.accordion(
+        {
+            "📐 What does “structure-sensitivity” mean? (the math)": mo.md(
+                r"""
+CheMeleon reads the molecular graph and, after message passing, produces a
+**per-atom hidden vector** $h_i \in \mathbb{R}^{2048}$ for every atom $i$. The
+molecule's fingerprint is just the **mean over atoms**:
+
+$$ f_k \;=\; \frac{1}{N}\sum_{i=1}^{N} h_{i,k}, \qquad k = 1,\dots,2048 $$
+
+Because the pooling is a plain mean, each atom's contribution to dimension $k$
+is **exact** (no approximation):
+
+$$ c_{i,k} \;=\; \frac{h_{i,k}}{N}, \qquad \sum_{i=1}^{N} c_{i,k} = f_k $$
+
+That is what the molecule heatmap draws for a chosen $k$.
+
+**Structure-sensitivity** of dimension $k$ is how much that contribution
+*varies across the atoms* of this molecule — we use the spread
+
+$$ s_k \;=\; \max_i h_{i,k} \;-\; \min_i h_{i,k} $$
+
+- **Large $s_k$:** different atoms push the dimension very differently, so the
+  dimension is reading a **local** structural feature — its heatmap is
+  informative (some atoms light up, others don't).
+- **Small $s_k$:** every atom contributes about the same, so the dimension
+  encodes something **diffuse/global** and its heatmap would be flat.
+
+The scrubber selects the dimensions with the largest $s_k$ (the ones worth
+looking at) and steps through them **in index order**. The purple strip shows
+each dimension's magnitude $|f_k|$; green ticks mark the structure-sensitive
+dimensions; blue marks the one you're viewing.
+
+*Caveat:* this is an honest, exact decomposition of the **mean-pool**, but a
+single learned dimension rarely maps to one human-named substructure the way a
+Morgan bit does — read it as “where this dimension looks,” not “what it is.”
+"""
+            )
+        }
+    )
     return
 
 
