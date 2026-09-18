@@ -48,6 +48,33 @@ OUT_DIR = Path("data/knn_cliffs")
 N_BITS = 2048
 _MORGAN = fpg.GetMorganGenerator(radius=2, fpSize=N_BITS)
 
+# We rebuild the held-out kNN k-curve under EACH fingerprint's similarity, so
+# the notebook can show that the accuracy-vs-k tradeoff (and where it peaks) is
+# itself a choice of fingerprint. All are binary -> Tanimoto.
+_FP_GENERATORS = {
+    "morgan": fpg.GetMorganGenerator(radius=2, fpSize=N_BITS),
+    "rdkit_topo": fpg.GetRDKitFPGenerator(fpSize=N_BITS),
+    "atom_pair": fpg.GetAtomPairGenerator(fpSize=N_BITS),
+    "top_torsion": fpg.GetTopologicalTorsionGenerator(fpSize=N_BITS),
+}
+FP_LABELS = {
+    "morgan": "Morgan (ECFP4)",
+    "maccs": "MACCS",
+    "rdkit_topo": "RDKit topological",
+    "atom_pair": "Atom pair",
+    "top_torsion": "Topological torsion",
+}
+FP_ORDER = ["morgan", "maccs", "atom_pair", "top_torsion", "rdkit_topo"]
+# one fixed color per fingerprint, shared by every chart that splits by
+# fingerprint (the k-curve lines AND the per-fingerprint cliff scatter).
+FP_COLORS = {
+    "morgan": "#4c6ef5",
+    "maccs": "#e8590c",
+    "atom_pair": "#2b8a3e",
+    "top_torsion": "#ae3ec9",
+    "rdkit_topo": "#f08c00",
+}
+
 # endpoint label -> molace dataset file (same mapping the RF importance uses)
 ENDPOINTS = {
     "Dopamine D3": "CHEMBL234_Ki",
@@ -56,7 +83,6 @@ ENDPOINTS = {
     "kappa-opioid": "CHEMBL237_Ki",
 }
 K_GRID = [1, 2, 3, 5, 8, 12, 20, 30, 50, 75, 100]
-N_NEIGHBORS = 8  # neighbours to record per cliff molecule (display caps below)
 SIM_THRESHOLD = 0.7  # "structurally similar" cutoff for the smoothness stat
 FLAT_GAP = 1.0  # |dpKi| below this = a flat (smooth) pair
 CLIFF_GAP = 2.0  # |dpKi| above this = an activity cliff
@@ -85,6 +111,26 @@ def load_endpoint(dataset: str):
 def ecfp_matrix(smiles):
     return np.asarray(
         [_MORGAN.GetFingerprintAsNumPy(Chem.MolFromSmiles(s)) for s in smiles],
+        dtype=np.float32,
+    )
+
+
+def fp_matrix(smiles, key):
+    """Binary fingerprint matrix (n, N_BITS) for a given fingerprint key."""
+    if key == "maccs":
+        from rdkit.Chem import MACCSkeys
+        from rdkit.DataStructs import ConvertToNumpyArray
+
+        rows = []
+        for s in smiles:
+            bv = MACCSkeys.GenMACCSKeys(Chem.MolFromSmiles(s))
+            arr = np.zeros(bv.GetNumBits(), dtype=np.uint8)
+            ConvertToNumpyArray(bv, arr)
+            rows.append(arr)
+        return np.asarray(rows, dtype=np.float32)
+    gen = _FP_GENERATORS[key]
+    return np.asarray(
+        [gen.GetFingerprintAsNumPy(Chem.MolFromSmiles(s)) for s in smiles],
         dtype=np.float32,
     )
 
@@ -175,6 +221,20 @@ def analyse_endpoint(label: str, dataset: str) -> dict:
         yp = knn_predict(S_te_tr, ytr, kk)
         k_curve.append({"k": k, "r2": r2(yte, yp)})
 
+    # --- the SAME held-out curve under each fingerprint's similarity, so the
+    #     notebook can overlay them: the accuracy/k tradeoff is fingerprint-
+    #     dependent, and so is where it peaks. ---
+    k_curves_by_fp = {}
+    for key in FP_ORDER:
+        Xk = fp_matrix(smis, key)
+        Sk = tanimoto(Xk[te], Xk[tr])
+        curve = []
+        for k in K_GRID:
+            kk = min(k, int(tr.sum()))
+            yp = knn_predict(Sk, ytr, kk)
+            curve.append({"k": k, "r2": r2(yte, yp)})
+        k_curves_by_fp[key] = {"label": FP_LABELS[key], "k_curve": curve}
+
     # --- per cliff pair: neighbours + predicted-vs-true across k ---
     # Reference set for a cliff molecule = the whole dataset minus itself (a
     # leave-one-out neighbourhood). This shows where the molecule actually sits.
@@ -185,6 +245,9 @@ def analyse_endpoint(label: str, dataset: str) -> dict:
     indexed_cliffs = [
         (i, cl) for tp in ctx.by_key().values() for i, cl in enumerate(tp.cliffs)
     ]
+    # per-fingerprint similarity matrices over the whole dataset, so each cliff
+    # molecule's neighbour cloud + kNN prediction can be shown per fingerprint.
+    fp_mats = {key: fp_matrix(smis, key) for key in FP_ORDER}
     pairs_out = []
     for i, cl in indexed_cliffs:
         c1 = Chem.MolToSmiles(Chem.MolFromSmiles(cl.smiles_1))
@@ -197,25 +260,41 @@ def analyse_endpoint(label: str, dataset: str) -> dict:
             sims = tanimoto(X[qi : qi + 1], X)[0]
             sims[qi] = -1.0  # exclude self
             order = np.argsort(-sims)
-            neighbors = [
-                {
-                    "smiles": smis[j],
-                    "tanimoto": float(sims[j]),
-                    "activity": float(y[j]),
-                }
-                for j in order[:N_NEIGHBORS]
-            ]
             # kNN prediction across the grid (leave-one-out neighbourhood).
             pred_by_k = []
             for k in K_GRID:
                 kk = min(k, len(order))
                 top = order[:kk]
                 pred_by_k.append({"k": k, "pred": float(y[top].mean())})
+            # activities of the top max(K_GRID) neighbours (floats only) so the
+            # notebook can draw the *cloud* of values kNN averages at any k.
+            _kmax = min(max(K_GRID), len(order))
+            neighbor_acts = [float(y[j]) for j in order[:_kmax]]
+
+            # the same neighbour cloud + kNN prediction under EACH fingerprint's
+            # similarity, so the notebook can break the cliff scatter out per
+            # fingerprint (each has its own nearest neighbours -> own cloud).
+            by_fp = {}
+            for key, Xk in fp_mats.items():
+                sk = tanimoto(Xk[qi : qi + 1], Xk)[0]
+                sk[qi] = -1.0
+                ok = np.argsort(-sk)
+                km = min(max(K_GRID), len(ok))
+                pk = []
+                for k in K_GRID:
+                    kk = min(k, len(ok))
+                    pk.append({"k": k, "pred": float(y[ok[:kk]].mean())})
+                by_fp[key] = {
+                    "label": FP_LABELS[key],
+                    "neighbor_acts": [float(y[j]) for j in ok[:km]],
+                    "pred_by_k": pk,
+                }
             return {
                 "smiles": self_smi,
                 "true": float(y[qi]),
-                "neighbors": neighbors,
+                "neighbor_acts": neighbor_acts,
                 "pred_by_k": pred_by_k,
+                "by_fp": by_fp,
             }
 
         pairs_out.append(
@@ -234,13 +313,20 @@ def analyse_endpoint(label: str, dataset: str) -> dict:
         "n_test": int(te.sum()),
         "smoothness": smoothness,
         "k_curve": k_curve,
+        "k_curves_by_fp": k_curves_by_fp,
         "cliff_pairs": pairs_out,
     }
 
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = {"n_bits": N_BITS, "k_grid": K_GRID, "endpoints": {}}
+    out = {
+        "n_bits": N_BITS,
+        "k_grid": K_GRID,
+        "fp_order": FP_ORDER,
+        "fp_colors": {FP_LABELS[k]: FP_COLORS[k] for k in FP_ORDER},
+        "endpoints": {},
+    }
     for label, dataset in ENDPOINTS.items():
         logger.info(f"{label}: analysing {dataset}")
         res = analyse_endpoint(label, dataset)

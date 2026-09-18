@@ -38,6 +38,19 @@ def k_curve(endpoint: str) -> list[dict]:
     return _data()["endpoints"][endpoint]["k_curve"]
 
 
+def k_curves_by_fp(endpoint: str) -> dict:
+    """{fp_key: {label, k_curve:[{k,r2}]}} - the held-out curve under each
+    fingerprint's similarity, for the overlaid multi-line plot."""
+    ep = _data()["endpoints"][endpoint]
+    return ep.get("k_curves_by_fp", {})
+
+
+def fp_colors() -> dict:
+    """{fingerprint label: hex color} - one fixed palette shared by every
+    chart that splits by fingerprint (k-curve lines + cliff scatter)."""
+    return dict(_data().get("fp_colors", {}))
+
+
 def endpoint_meta(endpoint: str) -> dict:
     ep = _data()["endpoints"][endpoint]
     return {"n_total": ep["n_total"], "n_train": ep["n_train"], "n_test": ep["n_test"]}
@@ -71,7 +84,8 @@ def cliff_pair(endpoint: str, index: int) -> dict | None:
     """The analysis record for one curated cliff pair, or None if not present.
 
     Shape: {index, cliff_on, change, mol1, mol2} where each mol is
-    {smiles, true, neighbors:[{smiles,tanimoto,activity}], pred_by_k:[{k,pred}]}.
+    {smiles, true, neighbor_acts:[float], pred_by_k:[{k,pred}],
+    by_fp:{fp_key:{label, neighbor_acts, pred_by_k}}}.
     """
     if not has_data() or endpoint not in _data()["endpoints"]:
         return None
@@ -87,12 +101,38 @@ def best_k(endpoint: str) -> dict:
     return max(curve, key=lambda d: d["r2"])
 
 
-def pred_at_k(mol_report: dict, k: int) -> float:
-    """A molecule's kNN prediction at neighbourhood size k (nearest grid point)."""
-    rows = mol_report["pred_by_k"]
+def pred_at_k(mol_report: dict, k: int, fp: str | None = None) -> float:
+    """A molecule's kNN prediction at neighbourhood size k (nearest grid point).
+
+    If ``fp`` (a fingerprint key like 'morgan') is given, use that fingerprint's
+    neighbourhood; otherwise use the default (ECFP) neighbourhood.
+    """
+    src = mol_report
+    if fp is not None:
+        src = mol_report.get("by_fp", {}).get(fp, mol_report)
+    rows = src["pred_by_k"]
     exact = next((r for r in rows if r["k"] == k), None)
     if exact is not None:
         return float(exact["pred"])
     # fall back to the closest available k on the grid
     closest = min(rows, key=lambda r: abs(r["k"] - k))
     return float(closest["pred"])
+
+
+def neighbor_acts_at_k(mol_report: dict, k: int, fp: str | None = None) -> list[float]:
+    """The activities of the k nearest neighbours (the values kNN averages).
+
+    If ``fp`` is given, use that fingerprint's neighbourhood. Falls back to
+    whatever was cached if k exceeds the stored count.
+    """
+    src = mol_report
+    if fp is not None:
+        src = mol_report.get("by_fp", {}).get(fp, mol_report)
+    acts = src.get("neighbor_acts", [])
+    return [float(a) for a in acts[:k]]
+
+
+def cliff_fps(mol_report: dict) -> dict:
+    """{fp_key: label} for the fingerprints this molecule report was scored
+    under (order preserved), or empty if only the default is present."""
+    return {k: v["label"] for k, v in mol_report.get("by_fp", {}).items()}
