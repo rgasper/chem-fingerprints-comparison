@@ -674,6 +674,152 @@ Morgan bit does — read it as “where this dimension looks,” not “what it 
 
 @app.cell
 def _(mo):
+    mo.md(r"""
+    ---
+
+    ## 🧪 Fingerprint playground: poke the molecule
+
+    Take the molecule you picked at the top, apply one small, real medicinal-
+    chemistry edit, and watch how the fingerprints react. Some edits barely
+    nudge them; some flip a surprising number of bits. **That spread is the
+    whole point** — a fingerprint is a *chosen* notion of similarity, so the
+    same one-atom change lands very differently depending on which fingerprint
+    is looking.
+    """)
+    return
+
+
+@app.cell
+def _(current_mol, mo, mol_valid):
+    from fingerprints import mol_edits as med
+
+    # Offer only edits that produce a valid, distinct product for THIS molecule,
+    # so a user can never click a button that no-ops or errors.
+    _edits = med.applicable_edits(current_mol) if mol_valid else []
+    if _edits:
+        edit_choice = mo.ui.dropdown(
+            options={e.label: e.key for e in _edits},
+            value=_edits[0].label,
+            label="Pick an edit to apply",
+        )
+    else:
+        edit_choice = mo.ui.dropdown(options={"(none)": ""}, value="(none)")
+    applicable = _edits
+    return applicable, edit_choice, med
+
+
+@app.cell
+def _(applicable, current_mol, edit_choice, med, mo, mol_valid):
+    from rdkit.Chem.Draw import rdMolDraw2D as _draw2d
+
+    def _svg(mol, width=280, height=210):
+        d = _draw2d.MolDraw2DSVG(width, height)
+        d.drawOptions().addStereoAnnotation = False
+        _draw2d.PrepareAndDrawMolecule(d, mol)
+        d.FinishDrawing()
+        return d.GetDrawingText()
+
+    if not mol_valid or not applicable:
+        _view = mo.md(
+            "*Pick a valid molecule at the top with at least one applicable edit "
+            "(single atoms like `C` or `O` have none).*"
+        ).callout(kind="info")
+    else:
+        _key = edit_choice.value
+        _edit = med.EDITS_BY_KEY.get(_key)
+        _product = med.apply_edit(current_mol, _key) if _key else None
+        if _product is None:
+            _view = mo.md("*That edit didn't apply here — pick another.*").callout(
+                kind="info"
+            )
+        else:
+            _stats = med.ecfp_diff_stats(current_mol, _product)
+            _ecfp_svg = med.ecfp_diff_svg(current_mol, _product, width=900, height=46)
+            _chem_svg = med.chemeleon_delta_svg(
+                current_mol, _product, width=900, height=46
+            )
+
+            _structures = mo.hstack(
+                [
+                    mo.vstack(
+                        [mo.md("**before**"), mo.Html(_svg(current_mol))],
+                        align="center",
+                    ),
+                    mo.md("## →"),
+                    mo.vstack(
+                        [mo.md("**after**"), mo.Html(_svg(_product))],
+                        align="center",
+                    ),
+                ],
+                justify="center",
+                gap=1,
+            )
+            _what = mo.md(f"**{_edit.label}.** {_edit.description}").callout(
+                kind="neutral"
+            )
+
+            # ECFP: the bit vector's response, drawn as a diff strip.
+            _ecfp_legend = mo.md(
+                f'ECFP Tanimoto **{_stats["tanimoto"]:.2f}** &nbsp;—&nbsp; '
+                f'<span style="color:#868e96">█ {_stats["shared"]} shared</span> &nbsp; '
+                f'<span style="color:#2f9e44">█ {_stats["added"]} switched on</span> &nbsp; '
+                f'<span style="color:#e03131">█ {_stats["removed"]} switched off</span>'
+            )
+            _ecfp_block = mo.vstack(
+                [
+                    mo.md("**ECFP (Morgan) — which bits flipped?**"),
+                    mo.Html(_ecfp_svg),
+                    _ecfp_legend,
+                ]
+            )
+
+            # CheMeleon: continuous embedding, so show the signed per-dimension
+            # shift for the dimensions that moved most.
+            if _chem_svg is not None:
+                _chem_block = mo.vstack(
+                    [
+                        mo.md(
+                            "**CheMeleon (learned) — how the embedding shifted**"
+                        ),
+                        mo.Html(_chem_svg),
+                        mo.md(
+                            '<span style="color:#1c7ed6">█ dimension moved up</span> &nbsp; '
+                            '<span style="color:#e8820c">█ dimension moved down</span> &nbsp; '
+                            "(all 2048 dimensions; shade = size of change — no "
+                            "discrete bits, just a continuous shift)"
+                        ),
+                    ]
+                )
+            else:
+                _chem_block = mo.md(
+                    "*CheMeleon weights unavailable — showing ECFP only.*"
+                ).callout(kind="info")
+
+            _view = mo.vstack(
+                [
+                    _structures,
+                    _what,
+                    _ecfp_block,
+                    mo.md(""),
+                    _chem_block,
+                    mo.md(
+                        "Flip between edits and watch the two panels disagree: a "
+                        "**halogen** or **magic methyl** often leaves the strip "
+                        "mostly grey, while an **aza-swap** or **bioisostere** "
+                        "lights up far more — even though the change is chemically "
+                        "'small'. Neither fingerprint knows whether the edit matters "
+                        "*biologically*; each just reports its own chosen notion of "
+                        "similarity."
+                    ),
+                ]
+            )
+    mo.vstack([edit_choice, _view, mo.md("---")])
+    return
+
+
+
+@app.cell
+def _(mo):
     from fingerprints.data import context_cliffs as ctx
 
     target_pair_choice = mo.ui.dropdown(
@@ -1423,151 +1569,6 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
             ]
         )
     mo.vstack([_view, mo.md("---")])
-    return
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ---
-
-    ## 🧪 Fingerprint playground: poke the molecule
-
-    Take the molecule you picked at the top, apply one small, real medicinal-
-    chemistry edit, and watch how the fingerprints react. Some edits barely
-    nudge them; some flip a surprising number of bits. **That spread is the
-    whole point** — a fingerprint is a *chosen* notion of similarity, so the
-    same one-atom change lands very differently depending on which fingerprint
-    is looking.
-    """)
-    return
-
-
-@app.cell
-def _(current_mol, mo, mol_valid):
-    from fingerprints import mol_edits as med
-
-    # Offer only edits that produce a valid, distinct product for THIS molecule,
-    # so a user can never click a button that no-ops or errors.
-    _edits = med.applicable_edits(current_mol) if mol_valid else []
-    if _edits:
-        edit_choice = mo.ui.dropdown(
-            options={e.label: e.key for e in _edits},
-            value=_edits[0].label,
-            label="Pick an edit to apply",
-        )
-    else:
-        edit_choice = mo.ui.dropdown(options={"(none)": ""}, value="(none)")
-    applicable = _edits
-    return applicable, edit_choice, med
-
-
-@app.cell
-def _(applicable, current_mol, edit_choice, med, mo, mol_valid):
-    from rdkit.Chem.Draw import rdMolDraw2D as _draw2d
-
-    def _svg(mol, width=280, height=210):
-        d = _draw2d.MolDraw2DSVG(width, height)
-        d.drawOptions().addStereoAnnotation = False
-        _draw2d.PrepareAndDrawMolecule(d, mol)
-        d.FinishDrawing()
-        return d.GetDrawingText()
-
-    if not mol_valid or not applicable:
-        _view = mo.md(
-            "*Pick a valid molecule at the top with at least one applicable edit "
-            "(single atoms like `C` or `O` have none).*"
-        ).callout(kind="info")
-    else:
-        _key = edit_choice.value
-        _edit = med.EDITS_BY_KEY.get(_key)
-        _product = med.apply_edit(current_mol, _key) if _key else None
-        if _product is None:
-            _view = mo.md("*That edit didn't apply here — pick another.*").callout(
-                kind="info"
-            )
-        else:
-            _stats = med.ecfp_diff_stats(current_mol, _product)
-            _ecfp_svg = med.ecfp_diff_svg(current_mol, _product, width=900, height=46)
-            _chem_svg = med.chemeleon_delta_svg(
-                current_mol, _product, width=900, height=46
-            )
-
-            _structures = mo.hstack(
-                [
-                    mo.vstack(
-                        [mo.md("**before**"), mo.Html(_svg(current_mol))],
-                        align="center",
-                    ),
-                    mo.md("## →"),
-                    mo.vstack(
-                        [mo.md("**after**"), mo.Html(_svg(_product))],
-                        align="center",
-                    ),
-                ],
-                justify="center",
-                gap=1,
-            )
-            _what = mo.md(f"**{_edit.label}.** {_edit.description}").callout(
-                kind="neutral"
-            )
-
-            # ECFP: the bit vector's response, drawn as a diff strip.
-            _ecfp_legend = mo.md(
-                f'ECFP Tanimoto **{_stats["tanimoto"]:.2f}** &nbsp;—&nbsp; '
-                f'<span style="color:#868e96">█ {_stats["shared"]} shared</span> &nbsp; '
-                f'<span style="color:#2f9e44">█ {_stats["added"]} switched on</span> &nbsp; '
-                f'<span style="color:#e03131">█ {_stats["removed"]} switched off</span>'
-            )
-            _ecfp_block = mo.vstack(
-                [
-                    mo.md("**ECFP (Morgan) — which bits flipped?**"),
-                    mo.Html(_ecfp_svg),
-                    _ecfp_legend,
-                ]
-            )
-
-            # CheMeleon: continuous embedding, so show the signed per-dimension
-            # shift for the dimensions that moved most.
-            if _chem_svg is not None:
-                _chem_block = mo.vstack(
-                    [
-                        mo.md(
-                            "**CheMeleon (learned) — how the embedding shifted**"
-                        ),
-                        mo.Html(_chem_svg),
-                        mo.md(
-                            '<span style="color:#1c7ed6">█ dimension moved up</span> &nbsp; '
-                            '<span style="color:#e8820c">█ dimension moved down</span> &nbsp; '
-                            "(all 2048 dimensions; shade = size of change — no "
-                            "discrete bits, just a continuous shift)"
-                        ),
-                    ]
-                )
-            else:
-                _chem_block = mo.md(
-                    "*CheMeleon weights unavailable — showing ECFP only.*"
-                ).callout(kind="info")
-
-            _view = mo.vstack(
-                [
-                    _structures,
-                    _what,
-                    _ecfp_block,
-                    mo.md(""),
-                    _chem_block,
-                    mo.md(
-                        "Flip between edits and watch the two panels disagree: a "
-                        "**halogen** or **magic methyl** often leaves the strip "
-                        "mostly grey, while an **aza-swap** or **bioisostere** "
-                        "lights up far more — even though the change is chemically "
-                        "'small'. Neither fingerprint knows whether the edit matters "
-                        "*biologically*; each just reports its own chosen notion of "
-                        "similarity."
-                    ),
-                ]
-            )
-    mo.vstack([edit_choice, _view, mo.md("---")])
     return
 
 
