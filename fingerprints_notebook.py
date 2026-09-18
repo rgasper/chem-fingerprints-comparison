@@ -1350,6 +1350,39 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
 
 
 @app.cell
+def _(mo):
+    mo.md(r"""
+    ### An appetizer: a clue, not a cure
+
+    We've shown the hard part — that *no* structure-only fingerprint, fixed or
+    learned, can see an activity cliff, because the cliff is exactly where
+    "similar structure → similar activity" breaks. So where do you even look for
+    the missing signal?
+
+    What follows is an **appetizer, not a solution.** The idea: a cliff is a
+    fact about *binding*, so look at what each molecule actually does in the
+    **3D pocket**. Below, we fold each ligand into the pocket with **Boltz**,
+    detect its contacts with **PLIP**, and read an *interaction* fingerprint off
+    the pose — bits that are physical contacts, not graph fragments.
+
+    Be clear-eyed about what this is and isn't:
+
+    - It's a **clue in a direction**, not a general fix. For the μ-opioid pair
+      it points at a plausible cause (a single extra H-bond); for others it
+      barely moves the needle.
+    - These are **predicted** poses — binding-mode *hypotheses*, not
+      experimental structures — for a **handful** of curated pairs. A
+      qualitative contrast, never a benchmark.
+    - Making this a real method would need **more data** and **local context in
+      both spaces at once**: nearby chemical structure *and* nearby protein
+      structure. Activity cliffs stay an open, actively-researched problem.
+
+    With that framing, here's the appetizer.
+    """)
+    return
+
+
+@app.cell
 def _(cliff_choice, ctx, cv, mo, target_pair_choice):
     from fingerprints import pose_view as pv
     from fingerprints.complex_viewer import ComplexViewer
@@ -1623,9 +1656,12 @@ def _(alt, cliff_choice, ctx, cv, mo, pd, target_pair_choice):
             f"just **{_plif:.2f}** — it *resolves* a difference the 2D encodings "
             f"hide, because it looks at what the molecule actually does in the "
             f"binding site. (Boltz-predicted poses for a handful of pairs — a "
-            f"qualitative contrast, not a benchmark.) The lesson of the whole "
-            f"notebook, in one chart: to see past a fingerprint's blind spot, look "
-            f"beyond 2D structure."
+            f"qualitative contrast, not a benchmark.) That's the whole notebook in "
+            f"one chart — not a solved problem, but a **direction**: a cliff "
+            f"invisible to 2D structure starts to show up once you add local "
+            f"context from the *binding event itself*. Turning that clue into a "
+            f"general method would need far more data and local context in both "
+            f"chemical and protein structure — still open work."
         ).callout(kind="info")
     else:
         _note = mo.md(
