@@ -37,6 +37,8 @@ RF_TREES = 400
 ENDPOINTS = [
     ("Dopamine D3", "CHEMBL234_Ki"),
     ("Dopamine D4", "CHEMBL219_Ki"),
+    ("mu-opioid", "CHEMBL233_Ki"),
+    ("kappa-opioid", "CHEMBL237_Ki"),
 ]
 
 _MORGAN = fpg.GetMorganGenerator(radius=2, fpSize=N_BITS)

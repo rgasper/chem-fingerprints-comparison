@@ -951,16 +951,15 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
     # Where does a MODEL look? Train a RandomForest to predict activity from
     # each fingerprint, then project its feature importances back onto the
     # cliff pair - as a molecule heatmap and as an importance-tinted strip.
-    # (Trained on the Dopamine D3/D4 datasets; shown when that pair is picked.)
+    # (Trained on all curated endpoints; shown when a pair is picked.)
     _tp = ctx.by_key()[target_pair_choice.value]
     _cl = _tp.cliffs[cliff_choice.value]
     _eps = iv.endpoints() if iv.has_data() else []
     _have = _tp.target_a in _eps and _tp.target_b in _eps
     if not _have:
         _view = mo.md(
-            "*Feature-importance models were trained on the **Dopamine D3/D4** "
-            "pair - pick that pair above to see where the models look. "
-            "(Run `scripts/train_importance.py` to add more.)*"
+            "*Feature-importance models weren't precomputed for this pair yet. "
+            "(Run `scripts/train_importance.py` to add it.)*"
         ).callout(kind="info")
     else:
         _m1 = _Chem.MolFromSmiles(_cl.smiles_1)
@@ -1050,8 +1049,8 @@ def _(alt, cliff_choice, ctx, mo, pd, resample_flat, target_pair_choice):
 
     if _cliff_ep not in _eps:
         _view = mo.md(
-            "*This census was precomputed for the **Dopamine D3/D4** datasets — "
-            "pick that pair above.*"
+            "*This census wasn't precomputed for this pair yet — "
+            "pick another pair above.*"
         ).callout(kind="info")
     else:
         _s = knn.smoothness(_cliff_ep)
@@ -1179,7 +1178,7 @@ def _(knn, mo):
 
 @app.cell
 def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
-    # kNN cliff analysis was precomputed for the Dopamine D3/D4 datasets.
+    # kNN cliff analysis, precomputed per endpoint (all curated pairs).
     _tp = ctx.by_key()[target_pair_choice.value]
     _idx = cliff_choice.value
     _k = k_slider.value
@@ -1190,9 +1189,9 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
 
     if _pair is None:
         _view = mo.md(
-            "*The kNN cliff analysis was precomputed for the **Dopamine D3/D4** "
-            "pair — pick that pair above to explore it. "
-            "(Run `scripts/analyze_knn_cliffs.py` to add more.)*"
+            "*The kNN cliff analysis wasn't precomputed for this pair yet — "
+            "pick another pair above. "
+            "(Run `scripts/analyze_knn_cliffs.py` to add it.)*"
         ).callout(kind="info")
     else:
         _ep = _pair["cliff_on"]
@@ -1630,8 +1629,8 @@ def _(alt, cliff_choice, ctx, cv, mo, pd, target_pair_choice):
         ).callout(kind="info")
     else:
         _note = mo.md(
-            "*Pick the **Dopamine D3/D4** pair (with cached poses) to add the "
-            "interaction-fingerprint bar to this recap.*"
+            "*No cached pose for this pair, so the interaction-fingerprint bar "
+            "is omitted from this recap.*"
         ).callout(kind="neutral")
     mo.vstack(
         [

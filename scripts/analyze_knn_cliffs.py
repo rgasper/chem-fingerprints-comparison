@@ -2,7 +2,7 @@
 simplest model whose entire behaviour IS the fingerprint's notion of similarity:
 k-nearest-neighbours regression on ECFP (Tanimoto).
 
-For each endpoint (Dopamine D3, D4) we cache:
+For each endpoint (Dopamine D3, D4; mu-, kappa-opioid) we cache:
 
   * ``k_curve``: held-out R^2 as a function of k - the real bias/variance
     tradeoff (memorise locally at small k vs. smooth globally at large k). This
@@ -52,6 +52,8 @@ _MORGAN = fpg.GetMorganGenerator(radius=2, fpSize=N_BITS)
 ENDPOINTS = {
     "Dopamine D3": "CHEMBL234_Ki",
     "Dopamine D4": "CHEMBL219_Ki",
+    "mu-opioid": "CHEMBL233_Ki",
+    "kappa-opioid": "CHEMBL237_Ki",
 }
 K_GRID = [1, 2, 3, 5, 8, 12, 20, 30, 50, 75, 100]
 N_NEIGHBORS = 8  # neighbours to record per cliff molecule (display caps below)
@@ -176,9 +178,15 @@ def analyse_endpoint(label: str, dataset: str) -> dict:
     # --- per cliff pair: neighbours + predicted-vs-true across k ---
     # Reference set for a cliff molecule = the whole dataset minus itself (a
     # leave-one-out neighbourhood). This shows where the molecule actually sits.
-    tp = ctx.by_key()["D3_vs_D4"]
+    # Scan every curated target-pair's cliffs; keep the ones whose molecules
+    # actually live in *this* endpoint's dataset. The notebook looks a cliff up
+    # by (endpoint == cliff.cliff_on, index == position in its target pair), so
+    # we preserve the cliff's original index within its own pair.
+    indexed_cliffs = [
+        (i, cl) for tp in ctx.by_key().values() for i, cl in enumerate(tp.cliffs)
+    ]
     pairs_out = []
-    for i, cl in enumerate(tp.cliffs):
+    for i, cl in indexed_cliffs:
         c1 = Chem.MolToSmiles(Chem.MolFromSmiles(cl.smiles_1))
         c2 = Chem.MolToSmiles(Chem.MolFromSmiles(cl.smiles_2))
         if c1 not in idx_of or c2 not in idx_of:
