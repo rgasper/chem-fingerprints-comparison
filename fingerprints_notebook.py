@@ -1228,11 +1228,9 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
                 ),
                 k_slider,
                 _verdict,
-                mo.hstack(
-                    [_neighbor_panel(_m1, "molecule 1"),
-                     _neighbor_panel(_m2, "molecule 2")],
-                    widths=[1, 1], gap=2,
-                ),
+                _neighbor_panel(_m1, "molecule 1"),
+                mo.md("---"),
+                _neighbor_panel(_m2, "molecule 2"),
             ]
         )
     mo.vstack([_view, mo.md("---")])
