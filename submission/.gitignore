@@ -1,0 +1,12 @@
+# Standalone submission env + download caches (regenerated on demand)
+.venv/
+.cache/
+__pycache__/
+*.py[oc]
+*.egg-info/
+.ruff_cache/
+.marimo.log
+marimo.log
+
+# Precomputed analysis outputs and 3D poses under data/ ARE tracked — they are
+# the shipped artifacts the notebook reads. Do not ignore data/.
