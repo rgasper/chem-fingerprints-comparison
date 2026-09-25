@@ -102,6 +102,33 @@ def fingerprint(mol: Chem.Mol) -> np.ndarray:
     return atom_hidden(mol).mean(axis=0)
 
 
+def fingerprint_matrix(mols, batch_size: int = 256) -> np.ndarray:
+    """Mean-pooled CheMeleon fingerprints for many molecules, batched.
+
+    Runs message passing on batches of molecules at once (one graph batch per
+    forward pass) and mean-pools each molecule's atom rows. Far faster than
+    calling :func:`fingerprint` in a loop. Returns ``(len(mols), EMBED_DIM)``.
+    """
+    import torch
+    from chemprop.data import BatchMolGraph
+
+    mp, feat, device = _load_mp()
+    out = np.empty((len(mols), EMBED_DIM), dtype=np.float32)
+    for start in range(0, len(mols), batch_size):
+        chunk = mols[start : start + batch_size]
+        graphs = [feat(m) for m in chunk]
+        bmg = BatchMolGraph(graphs)
+        bmg.to(device)
+        with torch.no_grad():
+            H = mp(bmg).cpu().numpy()  # (total atoms in chunk, EMBED_DIM)
+        # BatchMolGraph concatenates atoms; split back per molecule by count.
+        offset = 0
+        for i, m in enumerate(chunk):
+            n = m.GetNumAtoms()
+            out[start + i] = H[offset : offset + n].mean(axis=0)
+            offset += n
+    return out
+
 def atom_contributions(mol: Chem.Mol, dim: int) -> np.ndarray:
     """Each atom's exact contribution to embedding dimension ``dim``.
 
@@ -239,6 +266,8 @@ def heatmap_svg(mol: Chem.Mol, dim: int, *, width: int = 460, height: int = 340)
         d.FinishDrawing()
         return d.GetDrawingText()
     # If every atom contributes ~equally the map is flat; that's fine.
-    SimilarityMaps.GetSimilarityMapFromWeights(mol, weights, draw2d=d)
+    SimilarityMaps.GetSimilarityMapFromWeights(
+        mol, weights, draw2d=d, contourLines=5, gridResolution=0.3
+    )
     d.FinishDrawing()
     return d.GetDrawingText()

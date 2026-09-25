@@ -83,7 +83,9 @@ class FPScore:
     similarity: float
 
 
-def fingerprint_scores(cliff: ContextCliff) -> list[FPScore]:
+def fingerprint_scores(
+    cliff: ContextCliff, *, classical_only: bool = False
+) -> list[FPScore]:
     """How similar does each fingerprint think this pair is?
 
     Classical fingerprints use Tanimoto; the learned **CheMeleon** embedding is
@@ -95,6 +97,12 @@ def fingerprint_scores(cliff: ContextCliff) -> list[FPScore]:
     for key in FP_DISPLAY_ORDER:
         sim = float(pairwise_similarity(fps[key])[0, 1])
         out.append(FPScore(key=key, label=FP_LABELS[key], similarity=sim))
+    if classical_only:
+        # A learned embedding (CheMeleon) has no principled similarity metric of
+        # its own — it is meant to feed a trained head, not a cosine. So for the
+        # honest "every fingerprint calls this pair similar" comparison we show
+        # only the classical fingerprints, whose native metric IS Tanimoto.
+        return out
     # Append the learned fingerprint (cosine similarity of CheMeleon vectors).
     try:
         from fingerprints import chemeleon_fp as chf

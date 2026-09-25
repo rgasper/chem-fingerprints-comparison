@@ -109,7 +109,13 @@ def importance_heatmap_svg(
         return d.GetDrawingText()
     # All-positive importance: use a single-sided (white->green) feel by
     # centering weights so SimilarityMaps' diverging map reads as intensity.
-    SimilarityMaps.GetSimilarityMapFromWeights(mol, [float(x) for x in w], draw2d=d)
+    SimilarityMaps.GetSimilarityMapFromWeights(
+        mol,
+        [float(x) for x in w],
+        draw2d=d,
+        contourLines=5,
+        gridResolution=0.3,
+    )
     d.FinishDrawing()
     return d.GetDrawingText()
 

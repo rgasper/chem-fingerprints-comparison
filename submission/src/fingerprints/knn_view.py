@@ -137,3 +137,64 @@ def cliff_fps(mol_report: dict) -> dict:
     """{fp_key: label} for the fingerprints this molecule report was scored
     under (order preserved), or empty if only the default is present."""
     return {k: v["label"] for k, v in mol_report.get("by_fp", {}).items()}
+
+
+def cliff_rmse_by_fp(endpoint: str) -> dict:
+    """Per-fingerprint kNN RMSE **on the cliff molecules only**, vs k.
+
+    For every cliff pair in the endpoint we already cache each molecule's
+    predicted activity at every k (per fingerprint) and its true activity. This
+    pools *all* cliff molecules (both ends of every pair) and returns, for each
+    fingerprint, the RMSE of those predictions at each k:
+
+        {fp_key: {"label": str, "rmse_curve": [{"k": k, "rmse": v}, ...]}}
+
+    It is the cliff-focused analogue of ``k_curves_by_fp`` (which is the RMSE /
+    R² over the whole held-out set): where the global curve asks "how accurate
+    is kNN on average", this asks "how badly does it miss precisely the pairs
+    that break the smoothness assumption".
+    """
+    if not has_data() or endpoint not in _data()["endpoints"]:
+        return {}
+    import math
+
+    pairs = _data()["endpoints"][endpoint]["cliff_pairs"]
+    if not pairs:
+        return {}
+    # discover fingerprints + grid from the first molecule
+    first_mol = pairs[0]["mol1"]
+    by_fp_labels = {k: v["label"] for k, v in first_mol.get("by_fp", {}).items()}
+    if not by_fp_labels:
+        return {}
+    ks = [r["k"] for r in first_mol["by_fp"][next(iter(by_fp_labels))]["pred_by_k"]]
+
+    out: dict[str, dict] = {}
+    for fp_key, label in by_fp_labels.items():
+        curve = []
+        for k in ks:
+            sq_errs = []
+            for pair in pairs:
+                for mol_key in ("mol1", "mol2"):
+                    mol = pair[mol_key]
+                    fp_src = mol.get("by_fp", {}).get(fp_key)
+                    if fp_src is None:
+                        continue
+                    row = next(
+                        (r for r in fp_src["pred_by_k"] if r["k"] == k), None
+                    )
+                    if row is None:
+                        continue
+                    sq_errs.append((row["pred"] - mol["true"]) ** 2)
+            if sq_errs:
+                curve.append(
+                    {"k": k, "rmse": math.sqrt(sum(sq_errs) / len(sq_errs))}
+                )
+        out[fp_key] = {"label": label, "rmse_curve": curve}
+    return out
+
+
+def n_cliff_pairs(endpoint: str) -> int:
+    """How many curated cliff pairs back the cliff-RMSE curve for an endpoint."""
+    if not has_data() or endpoint not in _data()["endpoints"]:
+        return 0
+    return len(_data()["endpoints"][endpoint]["cliff_pairs"])
