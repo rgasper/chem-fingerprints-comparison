@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.24.0"
+__generated_with = "0.24.2"
 app = marimo.App(width="medium")
 
 
@@ -18,10 +18,19 @@ def _():
 @app.cell
 def _(mo):
     mo.md(r"""
-    # Molecular Fingerprints, Made Tangible
+    # Exploring Molecular Fingerprints and How They Fail
 
-    *A molab Notebook Competition entry.*
+    A **molecular fingerprint** turns a molecule into a fixed row of numbers so a computer can compare two
+    molecules by comparing their rows. It's the workhorse representation behind
+    a lot of cheminformatics operations: similarity search, clustering, and property
+    prediction for example are frequently based partially or entirely off of fingerprints as input.
+    This notebook takes fingerprints apart to see what they encode and where that encoding commonly fails.
+
+    To begin, we'll highlight one of the well-known failings of molecular fingerprints: activity cliffs.
+
+    *AI was used in the creation of this notebook. For the full disclaimer, head to the very bottom*
     """)
+    return
 
 
 @app.cell
@@ -122,6 +131,236 @@ def _(boltz_api_key, mo, recompute_toggle):
 
 @app.cell
 def _(mo):
+    mo.md(r"""
+    Here are two real molecules that differ by the only a few atoms - we've got a few options you can choose from, to help demonstrate that this is not a phenomenon specific to this exact choice of chemicals. Whichever case you pick, the two molecules are nearly identical in structure, and nearly - sometimes exactly - identical in fingerprint. And yet their measured potency against closely related enzymes differs by orders of magnitude — this is an *activity cliff*.
+
+    Pick a target pair and a molecule pair below. These are
+    two intentionally chosen, closely related, targets from the MoleculeACE dataset
+    where the same small change
+    to chemical structure is a cliff on one target and barely a ripple on the other.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
+    from fingerprints.data import context_cliffs as ctx
+
+    target_pair_choice = mo.ui.dropdown(
+        options={
+            f"{tp.target_a} vs {tp.target_b}": tp.key for tp in ctx.TARGET_PAIRS
+        },
+        value=f"{ctx.TARGET_PAIRS[0].target_a} vs {ctx.TARGET_PAIRS[0].target_b}",
+        label="Target pair",
+    )
+    return ctx, target_pair_choice
+
+
+@app.cell
+def _(ctx, mo, target_pair_choice):
+    _tp = ctx.by_key()[target_pair_choice.value]
+    # Label each curated pair by its plain-English change + which target it's a
+    # cliff on, so the dropdown itself previews the story.
+    _opts = {}
+    for _i, _c in enumerate(_tp.cliffs):
+        _opts[f"{_c.change}  —  cliff on {_c.cliff_on}"] = _i
+    cliff_choice = mo.ui.dropdown(
+        options=_opts, value=next(iter(_opts)), label="Molecule pair"
+    )
+    mo.vstack([mo.md(f"*{_tp.blurb}*"), mo.hstack([target_pair_choice, cliff_choice], justify="start", gap=2)])
+    return (cliff_choice,)
+
+
+@app.cell
+def _(cliff_choice, ctx, cv, mo, target_pair_choice):
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _pair = _tp.cliffs[cliff_choice.value]
+    _svg1, _svg2 = cv.pair_svgs(_pair, width=320, height=240)
+
+    # Structures with the changed atoms highlighted in orange.
+    _structures = mo.hstack(
+        [
+            mo.vstack([mo.Html(_svg1)], align="center"),
+            mo.md("## →"),
+            mo.vstack([mo.Html(_svg2)], align="center"),
+        ],
+        justify="center",
+        gap=1,
+    )
+    _change = mo.md(
+        f"The change: {_pair.change}.  \nThe orange atoms are all that differ "
+        "between these two molecules."
+    ).callout(kind="neutral")
+
+    # Dual-endpoint activity readout: cliff on one, flat on the other.
+    def _endpoint_card(target, pki1, pki2):
+        delta = abs(pki1 - pki2)
+        is_cliff = target == _pair.cliff_on
+        fold = cv.fold_change(delta)
+        kind = "danger" if is_cliff else "success"
+        verdict = f"**{fold} potency change** — a cliff!" if is_cliff else (
+            f"**{fold} — essentially unchanged** (flat)"
+        )
+        return mo.md(
+            f"#### {target}\n\n"
+            f"pKi: **{pki1}** → **{pki2}**  \n{verdict}"
+        ).callout(kind=kind)
+
+    _endpoints = mo.hstack(
+        [
+            _endpoint_card(_pair.target_a, _pair.pki_1_a, _pair.pki_2_a),
+            _endpoint_card(_pair.target_b, _pair.pki_1_b, _pair.pki_2_b),
+        ],
+        widths=[1, 1],
+        gap=2,
+    )
+    mo.vstack([_structures, _change, _endpoints, mo.md("---")])
+    return
+
+
+@app.cell
+def _(alt, cliff_choice, ctx, cv, mo, pd, target_pair_choice):
+    # The reveal: every CLASSICAL structure fingerprint scores this pair as very
+    # similar - one number, blind to which endpoint it's applied to. We show the
+    # classical fingerprints only: their native metric is Tanimoto, so the
+    # comparison is apples-to-apples. (Learned fingerprints don't define a
+    # similarity of their own - more on that once we open the hood.)
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _pair = _tp.cliffs[cliff_choice.value]
+    _scores = cv.fingerprint_scores(_pair, classical_only=True)
+    _df = pd.DataFrame(
+        [
+            {"fingerprint": s.label, "similarity": round(s.similarity, 3)}
+            for s in _scores
+        ]
+    )
+    _chart = (
+        alt.Chart(_df)
+        .mark_bar(cornerRadius=3, color="#4c6ef5")
+        .encode(
+            x=alt.X(
+                "similarity:Q",
+                title="fingerprint similarity",
+                scale=alt.Scale(domain=[0, 1]),
+            ),
+            y=alt.Y("fingerprint:N", sort="-x"),
+            tooltip=[alt.Tooltip("fingerprint:N"), alt.Tooltip("similarity:Q")],
+        )
+        .properties(height=250)
+    )
+    _lo = min(s.similarity for s in _scores)
+    _hi = max(s.similarity for s in _scores)
+    _punchline = mo.md(
+        f"Every fingerprint calls this pair similar (similarity "
+        f"{_lo:.2f}–{_hi:.2f}). "
+        f"That verdict is right for {_pair.flat_on} (where the pair really has similar activity "
+        f") and wrong for {_pair.cliff_on} (where it's a cliff). "
+    ).callout(kind="warn")
+    mo.vstack(
+        [
+            mo.md("**How similar each fingerprint thinks this pair is:**"),
+            mo.as_html(_chart),
+            _punchline,
+            mo.md("---"),
+        ]
+    )
+    return
+
+
+@app.cell
+def _(cliff_choice, ctx, mo, setup_ready, target_pair_choice):
+    from rdkit import Chem as _Chem
+
+    from fingerprints import importance_view as iv
+
+    assert setup_ready  # gate on CheMeleon weights (importance heatmaps use them)
+
+    # Where does a MODEL look? Train a RandomForest to predict activity from
+    # each fingerprint, then project its feature importances back onto the
+    # cliff pair - as a molecule heatmap and as an importance-tinted strip.
+    # (Trained on all curated endpoints; shown when a pair is picked.)
+    _tp = ctx.by_key()[target_pair_choice.value]
+    _cl = _tp.cliffs[cliff_choice.value]
+    _eps = iv.endpoints() if iv.has_data() else []
+    _have = _tp.target_a in _eps and _tp.target_b in _eps
+    if not _have:
+        _view = mo.md(
+            "*Feature-importance models weren't precomputed for this pair yet. "
+            "(Run `scripts/train_importance.py` to add it.)*"
+        ).callout(kind="info")
+    else:
+        _m1 = _Chem.MolFromSmiles(_cl.smiles_1)
+        _m2 = _Chem.MolFromSmiles(_cl.smiles_2)
+
+        def _panel(mol, mol_name, fp, fp_name):
+            _heat = iv.importance_heatmap_svg(mol, _cl.cliff_on, fp, width=300, height=220)
+            _strip = iv.strip_svg(mol, _cl.cliff_on, fp, width=300, height=26)
+            return mo.vstack(
+                [
+                    mo.md(f"**{mol_name} - {fp_name}**"),
+                    mo.Html(_heat),
+                    mo.md("*importance-tinted fingerprint*"),
+                    mo.Html(_strip),
+                ]
+            )
+
+        _mt_e = iv.metrics(_cl.cliff_on, "ecfp")
+        _mt_c = iv.metrics(_cl.cliff_on, "chemeleon")
+        _intro = mo.md(
+            f"Furthermore, the problem is not just when computing simple similarity. Train a model on each "
+            f"fingerprint and ask what atoms in the molecule are important to predict **{_cl.cliff_on}** "
+            f"pKi — a RandomForest was trained based on inputs from ECFP R² {_mt_e['r2']:.2f} or CheMeleon R² "
+            f"{_mt_c['r2']:.2f} fingerprints. Even "
+            f"with the regions highlighted, the two near-identical molecules light "
+            f"up almost the same — and in most cases, the parts of the molecules that the model finds important for"
+            f"the pKi prediction are not the same part of the molecule that's causing the change in activity."
+        )
+        _grid = mo.vstack(
+            [
+                mo.hstack(
+                    [_panel(_m1, "molecule 1", "ecfp", "ECFP"),
+                     _panel(_m2, "molecule 2", "ecfp", "ECFP")],
+                    widths=[1, 1], gap=2,
+                ),
+                mo.hstack(
+                    [_panel(_m1, "molecule 1", "chemeleon", "CheMeleon"),
+                     _panel(_m2, "molecule 2", "chemeleon", "CheMeleon")],
+                    widths=[1, 1], gap=2,
+                ),
+            ]
+        )
+        _view = mo.vstack([_intro, _grid])
+    mo.vstack([_view, mo.md("---")])
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ---
+
+    # What does a fingerprint actually encode?
+
+    So every static fingerprint we tried was fooled, and even a model trained on top
+    couldn't deconvolute the activty cliffs. To understand *why*, we need to see what a
+    fingerprint records in the first place. Fingerprints come in two families:
+
+    - **Classical** — MACCS, Morgan/ECFP, and the other classical
+      RDKit fingerprints. A person or a fixed algorithm decided in advance which
+      substructures cause which bits to activate. The simple way to compare molecules for similarity is the
+      Tanimoto (AKA [Jaccard](https://en.wikipedia.org/wiki/Jaccard_index)) overlap of those bits, and this similarity metric is directly related to some human-understandable difference between molecules.
+    - **Learned** — CheMeleon is a neural network *pre-trained* to read the molecular
+      graph and predict a wide swath of physicochemical properties; we then extract out the final embedding vector before the MLP decision head to use as a fingerprint. While it is possible to use cosine similarity with chemeleon vectors, due to anisotropy in the embedding space it's often not meaningful - almost all realistic chemical compounds will end up quite close in embedding space. See [a recent related work studying this in transformer models](https://arxiv.org/html/2401.12143v2) for more discussion on that.
+
+    These two fingerprint types differ in construction significantly, but share one important aspect - they're static. They can't reactively change to new contexts in chemical or target variable space.
+
+    Pick or type any molecule and scrub through bits/dimensions to see what parts of the molecule each fingerprint encodes.
+    """)
+    return
+
+
+@app.cell
+def _(mo):
     from fingerprints import gallery as gal
 
     mol_choice = mo.ui.dropdown(
@@ -195,6 +434,7 @@ def _(current_mol, mo, mol_valid, mx):
     else:
         _view = mo.md("*No valid molecule selected.*")
     _view
+    return
 
 
 @app.cell
@@ -319,6 +559,7 @@ def _(bit_slider, current_mol, mo, mol_valid, mx, scrub_bits):
             [mo.md("*Select a valid molecule to explore its MACCS bits.*"), mo.md("---")]
         )
     _view
+    return
 
 
 @app.cell
@@ -374,6 +615,7 @@ def _(current_mol, me, mo, mol_valid, morgan_on_bits, morgan_slider):
     else:
         _view = mo.md("*Select a valid molecule to explore its Morgan bits.*")
     _view
+    return
 
 
 @app.cell
@@ -391,8 +633,8 @@ def _(current_mol, me, mo, mol_valid, morgan_on_bits, morgan_slider):
         )
         _note = mo.md(
             f"Only **{len(morgan_on_bits)} of 2048** bits are on — Morgan vectors "
-            "are *sparse*. Unlike MACCS, an off bit here carries no meaning of its "
-            "own (it just means no atom environment hashed to that slot), so the "
+            "are sparse. Unlike MACCS, an off bit here carries no meaning of its "
+            "own - it just means no atom environment hashed to that bit, so the "
             "scrubber skips straight between the on bits."
         )
         _view = mo.vstack(
@@ -402,6 +644,7 @@ def _(current_mol, me, mo, mol_valid, morgan_on_bits, morgan_slider):
     else:
         _view = mo.md("---")
     _view
+    return
 
 
 @app.cell
@@ -453,9 +696,8 @@ def _(collision_slider, current_mol, me, mo, mol_valid, short_collisions):
                 ),
                 _legend,
                 mo.md(
-                    "*In a 2048-bit fingerprint these would (almost always) land "
-                    "on separate bits — that extra length is what buys the "
-                    "resolution.*"
+                    "*In a 2048-bit fingerprint these substructures would almost always land "
+                    "on separate bits — that extra length allows greater specificity."
                 ),
             ]
         )
@@ -505,8 +747,8 @@ def _(alt, current_mol, me, mo, mol_valid, pd):
             [
                 mo.as_html(_chart),
                 mo.md(
-                    f"This molecule has **{_distinct} distinct atom environments**. "
-                    "The rate falls off fast — which is why **2048 bits** is a common "
+                    f"This molecule has {_distinct} distinct atom environments. "
+                    "The has collision rate falls off fast — which is why **2048 bits** is a common "
                     "default: long enough that collisions are rare, short enough to "
                     "stay cheap."
                 ),
@@ -543,6 +785,7 @@ def _(collision_card, collision_curve_view, collision_slider, mo):
             mo.md("---"),
         ]
     )
+    return
 
 
 @app.cell
@@ -612,18 +855,34 @@ def _(ap_slider, ce, current_mol, mo, mol_valid, topo_slider, tt_slider):
             mo.md("### The rest of the RDKit toolbox (topological, atom-pair, torsion)"),
             mo.md(
                 "Beyond MACCS's checklist and Morgan's circular environments, "
-                "RDKit ships several more classical fingerprints. They each "
+                "RDKit ships several more \"classical\" fingerprints. They each "
                 "encode a different notion of structure — paths, atom pairs at "
                 "a distance, torsions — but share Morgan's hashing machinery. "
-                "These matter more than they first appear: later we'll see that "
-                "**which** of these encodings best avoids activity cliffs *flips "
-                "from one ADMET endpoint to another* — so it pays to know the "
-                "whole toolbox, not just Morgan."
+                "These differences matter: later we'll demonstrate that "
+                "certain fingerprints can properly capture activity cliffs for one ADMET endpoint "
+                "but can fail on another, and which fingerprint works best for which endpoint is not consistent."
             ),
             tabbed_fps,
             mo.md("---"),
         ]
     )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### Now the *learned* family: CheMeleon
+
+    **CheMeleon** is a message-passing neural network
+    trained on a large dataset, and its 2048 dimensions were learned,
+    not designed. There's no vocabulary to scrub and no Tanimoto — instead each
+    dimension is a continuous feature with a complex relationship to the input molecule. Below we show one way of visualizing what it's doing: pick a dimension and see which atoms drive that dimension for the currently selected molecule. In contrast to the "classical" fingerprints, we have to use shading instead of clear attribution, and you'll see that some of the most sensitive dimensions encode multiple seemingly unrelated parts of the molecule at once.
+
+    In this case, we're using the last embedding dimension before the MLP decision head that was used when CheMeleon was
+    pre-trained to predict thousands of phsyico-chemical features on millions of random drug-like molecules. If you practiced the usual approach to fine-tune the model on your particular dataset, this analysis would produce different results on identical molecules, since the model had to learn a new mapping of molecular structure to data.
+    """)
+    return
 
 
 @app.cell
@@ -633,7 +892,7 @@ def _(mo):
         stop=0.9,
         step=0.05,
         value=0.5,
-        label="Structure-sensitivity floor (fraction of this molecule's max)",
+        label="Structure-sensitivity floor (fraction of this molecule's most structure-sensitive dimension)",
         show_value=True,
         full_width=True,
     )
@@ -700,7 +959,7 @@ def _(
             f"A **pretrained, learned** fingerprint — nobody chose these features.\n\n"
             f"<span style='color:#2b8a3e'>● green</span> atoms push this dimension "
             f"up, <span style='color:#c2255c'>● pink</span> push it down. This is an "
-            f"*estimated* read of what the dimension keys on for this molecule — "
+            f"estimated read of what parts of this molecule most affect this dimension — "
             f"not a fixed substructure like a Morgan bit."
         )
         _view = mo.vstack(
@@ -714,6 +973,7 @@ def _(
             ]
         )
     mo.vstack([_view, mo.md("---")])
+    return
 
 
 @app.cell
@@ -758,13 +1018,14 @@ def _(mo):
     order**. The purple strip shows each dimension's magnitude $|f_k|$; green ticks
     mark the structure-sensitive dimensions; blue marks the one you're viewing.
 
-    *Caveat:* this is an honest, exact decomposition of the **mean-pool**, but a
+    This is an exact decomposition of the **mean-pool**, but a
     single learned dimension rarely maps to one human-named substructure the way a
     Morgan bit does — read it as “where this dimension looks,” not “what it is.”
     """
             )
         }
     )
+    return
 
 
 @app.cell
@@ -772,365 +1033,20 @@ def _(mo):
     mo.md(r"""
     ---
 
-    ## 🧪 Fingerprint playground: poke the molecule
+    ## Activity cliffs are not a protein-binding-specific issue
 
-    *(An optional aside — expand the panel below to try it.)* Take the molecule
-    you picked at the top, apply one small, real medicinal-chemistry edit, and
-    watch how the fingerprints react. Some edits barely nudge them; some flip a
-    surprising number of bits. **That spread is the whole point** — a
-    fingerprint is a *chosen* notion of similarity, so the same one-atom change
-    lands very differently depending on which fingerprint is looking.
-    """)
-
-
-@app.cell
-def _(current_mol, mo, mol_valid):
-    from fingerprints import mol_edits as med
-
-    # Offer only edits that produce a valid, distinct product for THIS molecule,
-    # so a user can never click a button that no-ops or errors.
-    _edits = med.applicable_edits(current_mol) if mol_valid else []
-    if _edits:
-        edit_choice = mo.ui.dropdown(
-            options={e.label: e.key for e in _edits},
-            value=_edits[0].label,
-            label="Pick an edit to apply",
-        )
-    else:
-        edit_choice = mo.ui.dropdown(options={"(none)": ""}, value="(none)")
-    applicable = _edits
-    return applicable, edit_choice, med
-
-
-@app.cell
-def _(applicable, current_mol, edit_choice, med, mo, mol_valid, setup_ready):
-    from rdkit.Chem.Draw import rdMolDraw2D as _draw2d
-
-    assert setup_ready  # gate on CheMeleon weights being present
-
-    def _svg(mol, width=280, height=210):
-        d = _draw2d.MolDraw2DSVG(width, height)
-        d.drawOptions().addStereoAnnotation = False
-        _draw2d.PrepareAndDrawMolecule(d, mol)
-        d.FinishDrawing()
-        return d.GetDrawingText()
-
-    if not mol_valid or not applicable:
-        _view = mo.md(
-            "*Pick a valid molecule at the top with at least one applicable edit "
-            "(single atoms like `C` or `O` have none).*"
-        ).callout(kind="info")
-    else:
-        _key = edit_choice.value
-        _edit = med.EDITS_BY_KEY.get(_key)
-        _product = med.apply_edit(current_mol, _key) if _key else None
-        if _product is None:
-            _view = mo.md("*That edit didn't apply here — pick another.*").callout(
-                kind="info"
-            )
-        else:
-            _stats = med.ecfp_diff_stats(current_mol, _product)
-            _ecfp_svg = med.ecfp_diff_svg(current_mol, _product, width=900, height=46)
-            _chem_svg = med.chemeleon_delta_svg(
-                current_mol, _product, width=900, height=46
-            )
-
-            _structures = mo.hstack(
-                [
-                    mo.vstack(
-                        [mo.md("**before**"), mo.Html(_svg(current_mol))],
-                        align="center",
-                    ),
-                    mo.md("## →"),
-                    mo.vstack(
-                        [mo.md("**after**"), mo.Html(_svg(_product))],
-                        align="center",
-                    ),
-                ],
-                justify="center",
-                gap=1,
-            )
-            _what = mo.md(f"**{_edit.label}.** {_edit.description}").callout(
-                kind="neutral"
-            )
-
-            # ECFP: the bit vector's response, drawn as a diff strip.
-            _ecfp_legend = mo.md(
-                f'ECFP Tanimoto **{_stats["tanimoto"]:.2f}** &nbsp;—&nbsp; '
-                f'<span style="color:#868e96">█ {_stats["shared"]} shared</span> &nbsp; '
-                f'<span style="color:#2f9e44">█ {_stats["added"]} switched on</span> &nbsp; '
-                f'<span style="color:#e03131">█ {_stats["removed"]} switched off</span>'
-            )
-            _ecfp_block = mo.vstack(
-                [
-                    mo.md("**ECFP (Morgan) — which bits flipped?**"),
-                    mo.Html(_ecfp_svg),
-                    _ecfp_legend,
-                ]
-            )
-
-            # CheMeleon: continuous embedding, so show the signed per-dimension
-            # shift for the dimensions that moved most.
-            if _chem_svg is not None:
-                _chem_block = mo.vstack(
-                    [
-                        mo.md(
-                            "**CheMeleon (learned) — how the embedding shifted**"
-                        ),
-                        mo.Html(_chem_svg),
-                        mo.md(
-                            '<span style="color:#1c7ed6">█ dimension moved up</span> &nbsp; '
-                            '<span style="color:#e8820c">█ dimension moved down</span> &nbsp; '
-                            "(all 2048 dimensions; shade = size of change — no "
-                            "discrete bits, just a continuous shift)"
-                        ),
-                    ]
-                )
-            else:
-                _chem_block = mo.md(
-                    "*CheMeleon weights unavailable — showing ECFP only.*"
-                ).callout(kind="info")
-
-            _view = mo.vstack(
-                [
-                    _structures,
-                    _what,
-                    _ecfp_block,
-                    mo.md(""),
-                    _chem_block,
-                    mo.md(
-                        "Flip between edits and watch the two panels disagree: a "
-                        "**halogen** or **magic methyl** often leaves the strip "
-                        "mostly grey, while an **aza-swap** or **bioisostere** "
-                        "lights up far more — even though the change is chemically "
-                        "'small'. Neither fingerprint knows whether the edit matters "
-                        "*biologically*; each just reports its own chosen notion of "
-                        "similarity."
-                    ),
-                ]
-            )
-    mo.accordion(
-        {
-            "🧪 Open the fingerprint playground": mo.vstack(
-                [edit_choice, _view]
-            )
-        }
-    )
-
-
-@app.cell
-def _(mo):
-    from fingerprints.data import context_cliffs as ctx
-
-    target_pair_choice = mo.ui.dropdown(
-        options={
-            f"{tp.target_a} vs {tp.target_b}": tp.key for tp in ctx.TARGET_PAIRS
-        },
-        value=f"{ctx.TARGET_PAIRS[0].target_a} vs {ctx.TARGET_PAIRS[0].target_b}",
-        label="Target pair",
-    )
-    return ctx, target_pair_choice
-
-
-@app.cell
-def _(ctx, mo, target_pair_choice):
-    _tp = ctx.by_key()[target_pair_choice.value]
-    # Label each curated pair by its plain-English change + which target it's a
-    # cliff on, so the dropdown itself previews the story.
-    _opts = {}
-    for _i, _c in enumerate(_tp.cliffs):
-        _opts[f"{_c.change}  —  cliff on {_c.cliff_on}"] = _i
-    cliff_choice = mo.ui.dropdown(
-        options=_opts, value=next(iter(_opts)), label="Molecule pair"
-    )
-    mo.vstack([mo.md(f"*{_tp.blurb}*"), mo.hstack([target_pair_choice, cliff_choice], justify="start", gap=2)])
-    return (cliff_choice,)
-
-
-@app.cell
-def _(cliff_choice, ctx, cv, mo, target_pair_choice):
-    _tp = ctx.by_key()[target_pair_choice.value]
-    _pair = _tp.cliffs[cliff_choice.value]
-    _svg1, _svg2 = cv.pair_svgs(_pair, width=320, height=240)
-
-    # Structures with the changed atoms highlighted in orange.
-    _structures = mo.hstack(
-        [
-            mo.vstack([mo.Html(_svg1)], align="center"),
-            mo.md("## →"),
-            mo.vstack([mo.Html(_svg2)], align="center"),
-        ],
-        justify="center",
-        gap=1,
-    )
-    _change = mo.md(
-        f"**The change:** {_pair.change}.  \nThe orange atoms are all that differ "
-        "between these two molecules."
-    ).callout(kind="neutral")
-
-    # Dual-endpoint activity readout: cliff on one, flat on the other.
-    def _endpoint_card(target, pki1, pki2):
-        delta = abs(pki1 - pki2)
-        is_cliff = target == _pair.cliff_on
-        fold = cv.fold_change(delta)
-        kind = "danger" if is_cliff else "success"
-        verdict = f"**{fold} potency change** — a cliff!" if is_cliff else (
-            f"**{fold} — essentially unchanged** (flat)"
-        )
-        return mo.md(
-            f"#### {target}\n\n"
-            f"pKi: **{pki1}** → **{pki2}**  \n{verdict}"
-        ).callout(kind=kind)
-
-    _endpoints = mo.hstack(
-        [
-            _endpoint_card(_pair.target_a, _pair.pki_1_a, _pair.pki_2_a),
-            _endpoint_card(_pair.target_b, _pair.pki_1_b, _pair.pki_2_b),
-        ],
-        widths=[1, 1],
-        gap=2,
-    )
-    mo.vstack([_structures, _change, _endpoints, mo.md("---")])
-
-
-@app.cell
-def _(alt, cliff_choice, ctx, cv, mo, pd, setup_ready, target_pair_choice):
-    # The reveal: every fingerprint scores this pair as fairly similar - one
-    # number, blind to which endpoint it's being applied to.
-    assert setup_ready  # gate on CheMeleon weights being present
-    _tp = ctx.by_key()[target_pair_choice.value]
-    _pair = _tp.cliffs[cliff_choice.value]
-    _scores = cv.fingerprint_scores(_pair)
-    _df = pd.DataFrame(
-        [
-            {"fingerprint": s.label, "similarity": round(s.similarity, 3)}
-            for s in _scores
-        ]
-    )
-    _chart = (
-        alt.Chart(_df)
-        .mark_bar(cornerRadius=3, color="#4c6ef5")
-        .encode(
-            x=alt.X(
-                "similarity:Q",
-                title="fingerprint similarity",
-                scale=alt.Scale(domain=[0, 1]),
-            ),
-            y=alt.Y("fingerprint:N", sort="-x"),
-            tooltip=[alt.Tooltip("fingerprint:N"), alt.Tooltip("similarity:Q")],
-        )
-        .properties(height=250)
-    )
-    _lo = min(s.similarity for s in _scores)
-    _hi = max(s.similarity for s in _scores)
-    _punchline = mo.md(
-        f"Every **structure** fingerprint calls this pair **similar** (similarity "
-        f"{_lo:.2f}–{_hi:.2f}) — they only see the small structural change. "
-        f"That verdict is **right for {_pair.flat_on}** (where the pair really is "
-        f"flat) and **badly wrong for {_pair.cliff_on}** (where it's a cliff). "
-        "One structural similarity, two opposite biological realities — the "
-        "fingerprint cannot tell which target you mean."
-    ).callout(kind="warn")
-    mo.vstack(
-        [
-            mo.md("**How similar each fingerprint thinks this pair is:**"),
-            mo.as_html(_chart),
-            _punchline,
-            mo.md("---"),
-        ]
-    )
-
-
-@app.cell
-def _(cliff_choice, ctx, mo, setup_ready, target_pair_choice):
-    from rdkit import Chem as _Chem
-
-    from fingerprints import importance_view as iv
-
-    assert setup_ready  # gate on CheMeleon weights (importance heatmaps use them)
-
-    # Where does a MODEL look? Train a RandomForest to predict activity from
-    # each fingerprint, then project its feature importances back onto the
-    # cliff pair - as a molecule heatmap and as an importance-tinted strip.
-    # (Trained on all curated endpoints; shown when a pair is picked.)
-    _tp = ctx.by_key()[target_pair_choice.value]
-    _cl = _tp.cliffs[cliff_choice.value]
-    _eps = iv.endpoints() if iv.has_data() else []
-    _have = _tp.target_a in _eps and _tp.target_b in _eps
-    if not _have:
-        _view = mo.md(
-            "*Feature-importance models weren't precomputed for this pair yet. "
-            "(Run `scripts/train_importance.py` to add it.)*"
-        ).callout(kind="info")
-    else:
-        _m1 = _Chem.MolFromSmiles(_cl.smiles_1)
-        _m2 = _Chem.MolFromSmiles(_cl.smiles_2)
-
-        def _panel(mol, mol_name, fp, fp_name):
-            _heat = iv.importance_heatmap_svg(mol, _cl.cliff_on, fp, width=300, height=220)
-            _strip = iv.strip_svg(mol, _cl.cliff_on, fp, width=300, height=26)
-            return mo.vstack(
-                [
-                    mo.md(f"**{mol_name} - {fp_name}**"),
-                    mo.Html(_heat),
-                    mo.md("*importance-tinted fingerprint*"),
-                    mo.Html(_strip),
-                ]
-            )
-
-        _mt_e = iv.metrics(_cl.cliff_on, "ecfp")
-        _mt_c = iv.metrics(_cl.cliff_on, "chemeleon")
-        _intro = mo.md(
-            f"A RandomForest predicting **{_cl.cliff_on}** pKi "
-            f"(ECFP R² {_mt_e['r2']:.2f} · CheMeleon R² {_mt_c['r2']:.2f}). "
-            f"Green marks where the model leans to make its call. Even with the "
-            f"regions highlighted, the two near-identical molecules light up "
-            f"almost the same - the model has no special signal for the cliff."
-        )
-        _grid = mo.vstack(
-            [
-                mo.hstack(
-                    [_panel(_m1, "molecule 1", "ecfp", "ECFP"),
-                     _panel(_m2, "molecule 2", "ecfp", "ECFP")],
-                    widths=[1, 1], gap=2,
-                ),
-                mo.hstack(
-                    [_panel(_m1, "molecule 1", "chemeleon", "CheMeleon"),
-                     _panel(_m2, "molecule 2", "chemeleon", "CheMeleon")],
-                    widths=[1, 1], gap=2,
-                ),
-            ]
-        )
-        _view = mo.vstack([_intro, _grid])
-    mo.vstack([_view, mo.md("---")])
-
-
-@app.cell
-def _(mo):
-    mo.md(r"""
-    ---
-
-    ## The cliff was never about the protein
-
-    We showed all of that with **two related targets** on purpose: a second
-    target is a built-in control. The *same* pair is a cliff on one target and
-    flat on the other, so a single fingerprint similarity is *provably*
-    ambiguous — you can point at the contradiction. That's why two targets are
-    where a cliff is **easiest to see**.
-
-    But look again at what actually broke: "similar structure → similar
-    number." Nothing in that sentence mentions a protein. It's an assumption
-    about *any* map from structure to a measured value — so it should break the
+    So far the presentation has centered on examining pairs of compounds which exhibit an activity cliff against one protein but don't against a second closely related protein. The point of this was to clearly demonstrate that this is not a fault of the chemistry. The core concept of the activity cliff is generalizable: it's an unavoidable property of any map of chemical structure to measured data - so it should break the
     same way for **ADMET** properties, where there's no obliging second target,
     just one number per molecule. If the cliff is really a property of the
     *encoding* and not the biology, we should find it here too.
 
-    So let's run the **exact same census** — no new machinery — on two real
+    So let's run an analysis on two
     ADMET endpoints from Therapeutics Data Commons: **aqueous solubility
     (AqSolDB)** and **lipophilicity (AstraZeneca logD)**. Same question: among
     the molecules a fingerprint calls *similar*, how often is the property
     actually similar?
     """)
+    return
 
 
 @app.cell
@@ -1273,9 +1189,9 @@ def _(adm, admet_choice, alt, mo, pd):
             f"*similar* (Tanimoto ≥ {_s['sim_threshold']:.1f}), **{_flat_pct}%** "
             f"are flat (within {_s['flat_gap']:.1f} log unit) but **{_cliff_pct}%** "
             f"are outright **cliffs** (> {_s['cliff_gap']:.1f} log units — more than "
-            f"~30× apart). No protein anywhere: a single-atom or chain-length "
+            f"~30× apart). A single-atom or chain-length "
             f"change can move solubility by orders of magnitude while the "
-            f"fingerprint barely blinks. **Each column repeats the census under a "
+            f"fingerprint barely changes - or sometimes not at all. **Each column repeats the census under a "
             f"different fingerprint's similarity, with that fingerprint's own "
             f"sharpest cliff drawn beneath** — the exact 'similar' set shifts, "
             f"but every fingerprint has a stubborn red cliff tail and a real pair "
@@ -1285,6 +1201,7 @@ def _(adm, admet_choice, alt, mo, pd):
             [mo.md(f"*{_mt['blurb']}*"), _msg, _grid]
         )
     admet_census_view
+    return
 
 
 @app.cell
@@ -1339,60 +1256,60 @@ def _(adm, alt, mo, pd):
         admet_compare_view = mo.vstack(
             [
                 mo.md(
-                    "### You can't know the cliffiness — or the best fingerprint "
+                    "### You can't know the 'cliffiness' — or the best fingerprint "
                     "— in advance\n\n"
-                    "The same census across every ADMET endpoint — three public "
+                    "The same census across those ADMET endpoints — three public "
                     "TDC benchmarks **plus OpenADMET's own ExpansionRx LogD and "
                     "solubility** — now broken out by fingerprint:"
                 ),
                 mo.as_html(_chart),
                 mo.md(
-                    "Three things jump out, and **all are only knowable after you "
-                    "have the data**:\n\n"
-                    "1. **Cliffiness swings by endpoint.** Public aqueous "
-                    "solubility (AqSolDB) is riddled with cliffs, lipophilicity "
-                    "far less, and Caco-2 permeability barely any. Solubility "
+                    "Three things are only knowable after you "
+                    "have the data:\n\n"
+                    "1. **'Cliffiness 'swings by endpoint.** Aqueous "
+                    "solubility (AqSolDB) has very many activity cliffs, lipophilicity "
+                    "far less, and Caco-2 permeability barely any. There is some intuitive sense here - Solubility "
                     "hinges on crystal packing and H-bonding a single atom can "
-                    "shatter; logD is a smoother bulk average.\n\n"
+                    "shatter; logD is a smoother bulk average - but telling ourselves we can understand this after-the-fact does not mean we can reliably predict it for new dataset in the future.\n\n"
                     "2. **No fingerprint is safest everywhere.** On solubility "
                     "**atom-pair** often flags fewer cliffs than Morgan or MACCS "
                     "— its distance-based similarity happens to align with what "
-                    "drives solubility — but that lead can evaporate on other "
+                    "drives solubility — but that lead can dissapear on other "
                     "endpoints. You could only *learn* which encoding suits an "
                     "endpoint by measuring it first.\n\n"
-                    "3. **OpenADMET's own data is measurably smoother.** Its "
+                    "3. **Activity cliffs are partially a symptom of less standardized data** OpenADMET's "
                     "ExpansionRx LogD and solubility show a *lower* cliff rate "
-                    "than the aggregated public AqSolDB — consistent with "
+                    "than the aggregated public AqSolDB — consistent with a "
                     "single-platform, controlled-condition measurement (less "
-                    "inter-lab noise masquerading as a cliff). The terrain is a "
-                    "property of the *data* as much as the chemistry.\n\n"
-                    "So the honest posture on a fresh endpoint is humility: you "
-                    "don't know how cliffy it is, or which encoding will cope, "
-                    "until you have data in hand."
+                    "inter-lab variation in measurments). The presence of cliffs is a "
+                    "property of the data as well as the chemistry. The problem is that until you have a "
+                    "more tightly standardized dataset to compare, you may not know that you're currently working with the noisier one. A model trained on data from another lab may not play well with data from your lab.\n\n"
                 ).callout(kind="info"),
                 mo.md("---"),
             ]
         )
     admet_compare_view
+    return
 
 
 @app.cell
 def _(mo):
     mo.md(r"""
-    ### Why *any* similarity model must miss the cliff
+    ### Why any fingerprint-based model will fail to learn the cliffs
 
     So the same failure shows up whether we're predicting binding or solubility
     — it travels with the fingerprint, not the biology. That raises the real
     question: is this a modelling mistake we could engineer away, or something
     deeper?
 
-    To answer it, strip the model down to nothing. Use **k-nearest-neighbours**
+    To explore that, first we strip the model down to a minimal example. Use **k-nearest-neighbours**
     on the fingerprint: a molecule's prediction is just the **average value of
-    its k most-similar neighbours**, where "similar" is Tanimoto. Nothing is
+    its k most-similar neighbours**, where "similar" is Tanimoto Similarity of the fingerprints. Nothing is
     learned on top — the fingerprint's notion of similarity *is* the entire
     model. So whatever kNN structurally cannot do is the fingerprint's own
-    limitation, laid bare, with no fancier learner to blame.
+    limitation, with no fancy decision boundaries to obfuscate the situation.
     """)
+    return
 
 
 @app.cell
@@ -1466,7 +1383,7 @@ def _(alt, cliff_choice, ctx, mo, pd, resample_flat, target_pair_choice):
         _cliff_pct = _s["frac_cliff"] * 100
         _ratio = round(_s["frac_flat"] / max(_s["frac_cliff"], 1e-9))
         _msg = mo.md(
-            f"**The impossibility, in one chart.** Take every pair of {_cliff_ep} "
+            f" Take every pair of {_cliff_ep} "
             f"molecules that a fingerprint calls *similar* (Tanimoto ≥ "
             f"{_s['sim_threshold']:.1f}): **{_s['n_similar_pairs']:,}** pairs. "
             f"**{_flat_pct}%** of them are **flat** (activity within "
@@ -1474,13 +1391,14 @@ def _(alt, cliff_choice, ctx, mo, pd, resample_flat, target_pair_choice):
             f"true cliffs — roughly **{_ratio}:1**.\n\n"
             f"So 'similar structure → similar activity' is *right the vast majority "
             f"of the time*. Any model that predicts from structure alone is "
-            f"rewarded for assuming it — and a model that instead predicted big "
-            f"activity jumps for near-identical structures would be wrong on those "
-            f"{_flat_pct}% to catch the {_cliff_pct:.1f}%. **A cliff is where nature "
+            f"rewarded for learning it — and a model that instead predicted big "
+            f"activity jumps for near-identical structures would be wrong on the flat"
+            f"{_flat_pct}% to catch the cliffy {_cliff_pct:.1f}%. "
+            "This results in an unresolvable tension between specific and global accuracy for whatever fingerprint-based model we pick. **A cliff is where reality"
             f"breaks the very assumption that makes the fingerprint useful.** No "
             f"amount of model cleverness recovers information the structure encoding "
             f"never contained — which is why activity cliffs are a well-documented "
-            f"hard limit in QSAR, not a modelling bug."
+            f"challenge in cheminformatics, not a modelling failure."
         ).callout(kind="danger")
 
         # A gallery of the flat majority: similar structures whose activity
@@ -1518,10 +1436,7 @@ def _(alt, cliff_choice, ctx, mo, pd, resample_flat, target_pair_choice):
         _gallery = mo.vstack(
             [
                 mo.md(
-                    "**The flat majority — similar structure, similar activity.** "
-                    "These random 'similar' pairs behave exactly as the assumption "
-                    "predicts, which is why the assumption pays off. Resample to see "
-                    "more; you'll have to hunt to find a cliff."
+                    "The flat majority — **similar structure, similar activity** is almost always right. "
                 ),
                 mo.hstack(
                     [_flat_card(fp) for fp in _flats] or [mo.md("*(no pairs)*")],
@@ -1625,7 +1540,43 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
             .mark_rule(color="#e8820c", strokeWidth=2)
             .encode(x="k:Q")
         )
-        _acc_chart = (_line + _rule).properties(height=200)
+        _acc_top = (_line + _rule).properties(height=170, width=300)
+
+        # (a2) The SAME k axis, but RMSE on the *cliff molecules only* (every
+        # cliff pair in this endpoint, not just the highlighted one). Stacked
+        # directly under the global-accuracy panel so the one orange current-k
+        # rule reads across both: as you slide k, watch global accuracy rise to
+        # a peak while the cliff error stays stubbornly flat and high - no
+        # neighbourhood size rescues the cliffs.
+        _cliff_rmse = knn.cliff_rmse_by_fp(_ep)
+        _n_cliff = knn.n_cliff_pairs(_ep)
+        if _cliff_rmse:
+            _crows = []
+            for _fv in _cliff_rmse.values():
+                for _pt in _fv["rmse_curve"]:
+                    _crows.append(
+                        {"k": _pt["k"], "rmse": _pt["rmse"],
+                         "fingerprint": _fv["label"]}
+                    )
+            _cdf = pd.DataFrame(_crows)
+            _cline = (
+                alt.Chart(_cdf)
+                .mark_line(point=True, strokeDash=[4, 2])
+                .encode(
+                    x=alt.X("k:Q", title="neighbourhood size k",
+                            scale=alt.Scale(type="log")),
+                    y=alt.Y("rmse:Q", title="cliff-pair RMSE (log units)"),
+                    color=_color_enc if _by_fp else alt.value("#4c6ef5"),
+                    tooltip=["fingerprint:N", "k:Q",
+                             alt.Tooltip("rmse:Q", format=".3f")],
+                )
+            )
+            _acc_bottom = (_cline + _rule).properties(height=170, width=300)
+            _acc_chart = alt.vconcat(_acc_top, _acc_bottom).resolve_scale(
+                color="shared"
+            )
+        else:
+            _acc_chart = _acc_top
 
         # (b) The cliff itself, "scatter-where-a-box-would-be", now split PER
         # FINGERPRINT: a kNN prediction is the MEAN of the k nearest neighbours,
@@ -1730,14 +1681,17 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
         _view = mo.vstack(
             [
                 mo.md(
-                    f"**{_ep}** — {_meta['n_total']} molecules. The accuracy plot "
-                    "now overlays **every fingerprint's** similarity; the orange "
-                    "rule marks the k you picked. Notice the curves peak at similar "
-                    "k but different heights — the fingerprint choice sets the ceiling."
+                    f"**{_ep}** — {_meta['n_total']} molecules. The plots share the "
+                    "same k axis and the same orange current-k rule. **Top:** "
+                    "global held-out accuracy (R²) per fingerprint — it rises to a "
+                    "peak at some k. **Bottom:** RMSE on the **cliff pairs only** "
+                    f"(all {_n_cliff} in this endpoint) — it just gets worse with increasing k. "
+                    "Slide k and watch the contradiction: the very "
+                    "neighbourhood size that maximises average accuracy just makes predictions over cliffs worse, because it washes out the contriubtion of small structural changes."
                 ),
                 mo.hstack(
                     [
-                        mo.vstack([mo.md("**Global accuracy vs k, per fingerprint**"), mo.as_html(_acc_chart)]),
+                        mo.vstack([mo.md("**Accuracy (top) vs cliff error (bottom) vs k**"), mo.as_html(_acc_chart)]),
                         mo.vstack([
                             mo.md(
                                 "**This cliff pair at k** — one coloured "
@@ -1757,6 +1711,7 @@ def _(alt, cliff_choice, ctx, k_slider, knn, mo, pd, target_pair_choice):
             ]
         )
     mo.vstack([_view, mo.md("---")])
+    return
 
 
 @app.cell
@@ -1764,179 +1719,410 @@ def _(mo):
     mo.md(r"""
     ---
 
-    ## Appetizers: clawing back the lost signal
+    ### Binary fingerprints literally can't count
+
+    Before we look at some of the ways that scientist try to overcome activity cliffs, one concrete failure mode is worth isolating
+    because it makes "the information isn't in the encoding" problem quite visible. Many
+    ADMET properties are **accumulating** — solubility, for instance: tack on
+    another –CH₂– and the desolvation cost keeps climbing. To predict such a
+    property you need to know *how many* hydrophobic units a molecule has. But a
+    standard **binary** fingerprint only records *whether* a substructure is
+    present, not **how many times**. This makes it quite hard to calculate accumulating properties from this input!
+
+    To demonstrate, we fit several encodings on AqSolDB and compare them on two targets:
+
+    - a **pure accumulator** we control exactly — *heavy-atom count*, which is
+      by definition a sum over the molecule
+    - **experimental solubility**
+
+    The fingerprints span both families from earlier: **binary Morgan** (the usual
+    fixed fingerprint), **count Morgan** (same bits, but each slot holds a count
+    so a linear head can literally add them up), and
+    the **CheMeleon** fingerprint. CheMeleon is interesting here: it's pre-trained for molecular
+    property prediction, so you might expect it to ace an accumulation task - and it gets close but not quite there. All heads are fairly tuned (RidgeCV) and trained on a scaffold split. To check if a sufficiently deep neural net
+    could somehow reconstruct accumulated properties from a fingerprint, we also try the **binary Morgan** feature with a narrow-but-deep MLP decision head.
+    """)
+    return
+
+
+@app.cell
+def _(alt, mo, pd, setup_ready):
+    from fingerprints import accumulation as acc
+
+    assert setup_ready
+
+    _targets = acc.target_labels()
+    with mo.status.spinner(
+        title="Training the models on AqSolDB (live, ~10 s)…"
+    ):
+        _n = acc.n_molecules()
+        _rows = []
+        for _t in _targets:
+            for _s in acc.scores(_t):
+                _rows.append(
+                    {
+                        "target": _t,
+                        "model": _s.label,
+                        "family": _s.family,
+                        "r2": round(_s.r2, 3),
+                    }
+                )
+    _df = pd.DataFrame(_rows)
+    # keep the model order stable (as returned by the analysis)
+    _model_order = list(dict.fromkeys(_df["model"]))
+    # colour by ENCODING FAMILY so the point reads at a glance: red = binary
+    # (can't count), green = count (can), purple = learned.
+    _fam_color = {"binary": "#e03131", "count": "#2b8a3e", "learned": "#7048e8"}
+    _chart = (
+        alt.Chart(_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("target:N", title=None, axis=alt.Axis(labelAngle=0)),
+            xOffset=alt.XOffset("model:N", sort=_model_order),
+            y=alt.Y("r2:Q", title="held-out R²", scale=alt.Scale(domain=[0, 1])),
+            color=alt.Color(
+                "model:N",
+                sort=_model_order,
+                scale=alt.Scale(
+                    domain=_model_order,
+                    range=[
+                        _fam_color[
+                            _df.loc[_df["model"] == m, "family"].iloc[0]
+                        ]
+                        for m in _model_order
+                    ],
+                ),
+                legend=alt.Legend(title=None, orient="bottom", columns=1),
+            ),
+            tooltip=["target:N", "model:N", "r2:Q"],
+        )
+        .properties(height=300, width=340)
+    )
+
+    def _r2(target, key):
+        for _s in acc.scores(target):
+            if _s.key == key:
+                return _s.r2
+        return float("nan")
+
+    _acc = "heavy-atom count"
+    _bl, _cl, _mlp = (
+        _r2(_acc, "binary_linear"),
+        _r2(_acc, "count_linear"),
+        _r2(_acc, "binary_mlp"),
+    )
+    _che = _r2(_acc, "chemeleon_linear")
+    _che_line = (
+        f" The **learned** CheMeleon fingerprint does markedly better — **R² "
+        f"{_che:.2f}** — well above the binary fingerprint. Even though it "
+        f"*mean*-pools over atoms (which divides out molecule size), its "
+        f"pretrained per-atom features carry enough size-correlated "
+        f"signal to reconstruct much of the count. A representation *learned* "
+        f"from data recovers a lot of what a fixed binarised encoding threw "
+        f"away. Given that CheMeleon was trained for calculated property prediction, it is not surprising that it's good at this task - but it's not perfect."
+    )
+    _verdict = mo.md(
+        f"On the **pure accumulator**, the story is blatant. A **count** "
+        f"fingerprint + a plain linear model scores **R² {_cl:.2f}** — it just "
+        f"sums the bits, which *is* the target. The **binary** fingerprint + the "
+        f"same linear model is capped at **R² {_bl:.2f}**: once you binarise, you "
+        f"can't tell one –CH₂– from six. Handing the binary "
+        f"fingerprint to a **narrow-but-deep neural net** moves it to "
+        f"**R² {_mlp:.2f}** — depth reshuffles which bits co-occur but can't "
+        f"recover multiplicity the encoding never stored."
+        f"{_che_line}\n\n"
+        f"The lesson: **whether you can accumulate is decided by the encoding "
+        f"(and its pooling) before any model runs** — a count vector or a learned "
+        f"representation can, a fixed binary presence-vector fundamentally can't. "
+        f"Real solubility is only *partly* accumulation (crystal packing, "
+        f"H-bonding and charge matter too), so on the right the gaps shrink. The "
+        f"controlled target exposes the mechanism cleanly, but the real data helps remind us reality (un?)fortunately is not so simple."
+    ).callout(kind="info")
+
+    mo.vstack(
+        [
+            mo.md(
+                f"**Encodings vs. two targets** — trained live on "
+                f"**{_n:,}** AqSolDB molecules (scaffold split). "
+                f"<span style='color:#e03131'>■ binary</span> · "
+                f"<span style='color:#2b8a3e'>■ count</span> · "
+                f"<span style='color:#7048e8'>■ learned</span>:"
+            ),
+            mo.as_html(_chart),
+            _verdict,
+            mo.md("---"),
+        ]
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ### Follow-up: does *counting* help every fingerprint — and every property?
+
+    The headline used Morgan. But binary-vs-count is a knob on **every** classical
+    RDKit fingerprint, so let's turn it on all of them at once — and, crucially,
+    on a **third kind of target**. So far every property has been ADMET-flavoured
+    (accumulating). Binding potency is different: it's molecular **recognition**
+    — does the molecule present the right shape to the pocket? — where the *count*
+    of a feature should matter far less than its *presence*.
+
+    The grid below is the same fair linear model (RidgeCV, scaffold split) run for
+    **four fingerprints × {binary, count} × three targets**: our pure accumulator
+    (heavy-atom count), aqueous solubility, and **Dopamine D3 binding pKi**
+    (MoleculeACE / ChEMBL). Watch where switching to counts helps — and where it
+    quietly backfires.
+    """)
+    return
+
+
+@app.cell
+def _(alt, mo, pd, setup_ready):
+    from fingerprints import accumulation as acc2
+
+    assert setup_ready
+
+    with mo.status.spinner(
+        title="Fitting 4 fingerprints × binary/count × 3 targets (live, ~40 s)…"
+    ):
+        _cells = acc2.survey()
+        _targets = acc2.survey_targets()
+        _fps = acc2.survey_fingerprints()
+        _counts = acc2.survey_n()
+    _df = pd.DataFrame(
+        [
+            {
+                "fingerprint": c.fingerprint,
+                "encoding": c.encoding,
+                "target": c.target,
+                "r2": round(c.r2, 3),
+            }
+            for c in _cells
+        ]
+    )
+
+    # Grouped bars: one facet per target, binary vs count side by side per fp.
+    _bars = (
+        alt.Chart(_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("encoding:N", title=None, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("r2:Q", title="held-out R²", scale=alt.Scale(domain=[-0.2, 1.0])),
+            color=alt.Color(
+                "encoding:N",
+                scale=alt.Scale(
+                    domain=["binary", "count"], range=["#e03131", "#2b8a3e"]
+                ),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
+            tooltip=["fingerprint:N", "encoding:N", "target:N", "r2:Q"],
+        )
+        .properties(width=95, height=150)
+        .facet(
+            column=alt.Column("fingerprint:N", sort=_fps, title=None),
+            row=alt.Row("target:N", sort=_targets, title=None),
+        )
+        .resolve_scale(y="shared")
+    )
+
+    # Quantify the flip: mean count-minus-binary delta per target.
+    def _mean_delta(target):
+        ds = [d for _, d in acc2.count_minus_binary(target)]
+        return sum(ds) / len(ds) if ds else float("nan")
+
+    _d_hac = _mean_delta("heavy-atom count")
+    _d_sol = _mean_delta("aqueous solubility")
+    _d_bind = _mean_delta(_targets[2])
+    _verdict = mo.md(
+        f"I'd suggest to read down each column. On the **pure accumulator** target "
+        f"(top row) switching binary→count *raises* R² for every fingerprint "
+        f"(mean **{_d_hac:+.2f}**) — counting is exactly what an accumulated total "
+        f"needs, and Morgan/topological (which at most barely encode multiplicity when "
+        f"binarised) gain the most.\n\n"
+        f"On the **real** properties the sign flips. Counts give **no** benefit on "
+        f"solubility (mean **{_d_sol:+.2f}**) and actively **hurt** binding "
+        f"(mean **{_d_bind:+.2f}**, worse for every fingerprint). Two possible reasons"
+        f": real endpoints are only partly accumulation, and binding is "
+        f"**recognition** — whether the right pharmacophore is *present* drives "
+        f"potency, while *how many copies* of a fragment a molecule has is mostly "
+        f"noise that a count vector lets the model overfit. So the encoding that "
+        f"is provably best on the controlled accumulator is the *wrong* choice on "
+        f"real properties — there is no "
+        f"universally best fingerprint - only the right one for the given task, and you can't usually know which it is in advance."
+    ).callout(kind="info")
+
+    mo.vstack(
+        [
+            mo.md(
+                f"**binary vs count, every classical fingerprint, three targets** "
+                f"— accumulator + solubility on **{_counts['accumulator']:,}** "
+                f"AqSolDB molecules, binding on **{_counts['binding']:,}** "
+                f"Dopamine-D3 molecules (all scaffold-split). "
+                f"<span style='color:#e03131'>■ binary</span> · "
+                f"<span style='color:#2b8a3e'>■ count</span>:"
+            ),
+            mo.as_html(_bars),
+            _verdict,
+            mo.md("---"),
+        ]
+    )
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ---
+
+    ## So can *anything* see the cliff?
 
     We've shown the hard part — that *no* structure-similarity model, fixed or
-    learned, can see a cliff, because a cliff is exactly where "similar
-    structure → similar number" breaks. The information simply isn't in the
+    learned, can see cliffs reliably, because a cliff is exactly where "similar
+    structure → similar number" mapping breaks. The required information to detect these cliffs without losing accuracy on most non-cliff data simply isn't in the
     encoding.
 
-    So the only way forward is to **compute something the fingerprint threw
-    away** — some more expensive, context-dependent quantity. The next two
-    sections are **appetizers, not solutions**: one for the ADMET side, one for
-    the binding side. Neither is new science; both just make the escape route
-    legible.
+    Two closing questions. First, the
+    static CheMeleon fingerprint nearly matched *count* fingerprints on some admet properties
+    properties — so does it finally **beat classical fingerprints on the
+    cliffs**? Second, a brief foray into a real solution: **compute something the 2D graph
+    threw away** — the actual 3D interaction in the pocket.
     """)
+    return
 
 
 @app.cell
 def _(mo):
     mo.md(r"""
-    ### Appetizer 1 — solubility: compute the physics, not the similarity
+    ### Does the *learned* fingerprint crack the cliffs?
 
-    Take the sharpest solubility cliffs from the census — the glycerol esters
-    that differ only by acyl-chain length. ECFP calls them **identical**
-    (Tanimoto 1.0), and even TPSA and H-bond-donor counts are *exactly* equal.
-    Every *similarity* lens is blind.
+    Earlier, CheMeleon nearly matched count fingerprints on smooth properties.
+    So here's a more intentional test on the hard case: for each binding endpoint, train a
+    model on **ECFP (fixed)** vs **CheMeleon** fingerprints — and, because a smarter
+    *head* is the obvious next move in the modeling, we try three: a **linear** read-out, a
+    **kNN** (similarity) read-out, and a **nonlinear MLP**. Then we measure RMSE
+    on the molecules MoleculeACE flags as **activity-cliff members** (very
+    similar to a neighbour, yet ≥10× different in potency) versus everyone else.
 
-    But solubility isn't about which substructures are present — it's about the
-    **desolvation cost of the whole molecule**. So compute *that* instead:
-    RDKit's Crippen **logP**, a textbook hydrophobicity model whose per-atom
-    contributions sum exactly to the molecule's logP. It's not a similarity at
-    all; it's an accumulated physical property — precisely the kind of quantity
-    the fingerprint discards. Watch the long alkyl chain light up as the hidden
-    hydrophobic burden that tanks solubility.
+    If the learned fingerprint or a fancier head genuinely resolved cliffs,
+    you'd see its cliff bar drop. Watch what actually happens.
     """)
+    return
 
 
 @app.cell
-def _(adm, mo):
-    from rdkit import Chem as _Chem
+def _(alt, mo, pd, setup_ready):
+    from fingerprints import learned_cliffs as lc
 
-    from fingerprints import physchem_view as pc
+    assert setup_ready
 
-    # The ADMET-side appetizer: on the *discovered* solubility cliffs, a
-    # physically-motivated computed property (Crippen logP) tracks the cliff
-    # that every structure-similarity lens calls identical. Pure RDKit, runs
-    # live - the honest, portable version of "more context-dependent
-    # computation recovers the lost signal" (heavier quantum-mechanical
-    # solvation would be the expensive cousin; not needed to make the point).
-    _sol_ep = "Aqueous solubility"
-    if not adm.has_data() or _sol_ep not in adm.endpoints():
-        physchem_view = mo.md(
-            "*Solubility census not precomputed — run "
-            "`scripts/analyze_admet_cliffs.py`.*"
-        ).callout(kind="info")
-    else:
-        # pick the cliff where every *similarity* lens is genuinely blind
-        # (Tanimoto ~1, and identical TPSA/HBD) so the contrast is honest -
-        # the glycerol-ester chain-length family, not e.g. the siloxane whose
-        # ring size does shift TPSA.
-        _gal = adm.cliff_gallery(_sol_ep)
-        _blind = [
-            c
-            for c in _gal
-            if (_p := pc.probe_pair(c["smiles_1"], c["smiles_2"], c["gap"]))
-            is not None
-            and _p.tanimoto >= 0.99
-            and _p.d_tpsa < 1.0
-            and _p.d_hbd == 0
+    with mo.status.spinner(
+        title="Training {ECFP, CheMeleon} × {linear, kNN, MLP} on 4 binding "
+        "endpoints (live, ~50 s)…"
+    ):
+        _res = lc.results()
+    _rows = []
+    for _r in _res:
+        _rows.append(
+            {
+                "endpoint": _r.endpoint,
+                "fingerprint": _r.fingerprint,
+                "head": _r.head,
+                "group": f"{_r.fingerprint} · {_r.head}",
+                "cliff RMSE": round(_r.cliff_rmse, 3),
+                "non-cliff RMSE": round(_r.noncliff_rmse, 3),
+            }
+        )
+    _df = pd.DataFrame(_rows)
+    # Mean cliff RMSE across endpoints for each (fingerprint, head).
+    _summary = (
+        _df.groupby(["fingerprint", "head"], as_index=False)["cliff RMSE"]
+        .mean()
+        .round(2)
+    )
+    _summary["group"] = _summary["fingerprint"] + " · " + _summary["head"]
+    _head_order = lc.heads()
+    _fp_order = lc.fingerprints()
+    _group_order = [f"{fp} · {h}" for fp in _fp_order for h in _head_order]
+    _chart = (
+        alt.Chart(_summary)
+        .mark_bar()
+        .encode(
+            x=alt.X("group:N", sort=_group_order, title=None,
+                    axis=alt.Axis(labelAngle=-40)),
+            y=alt.Y("cliff RMSE:Q",
+                    title="mean cliff-pair RMSE (log units, lower=better)",
+                    scale=alt.Scale(domain=[0, 1.2])),
+            color=alt.Color(
+                "fingerprint:N",
+                scale=alt.Scale(
+                    domain=_fp_order, range=["#4c6ef5", "#7048e8"]
+                ),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
+            tooltip=["fingerprint:N", "head:N",
+                     alt.Tooltip("cliff RMSE:Q", format=".2f")],
+        )
+        .properties(height=260, width=360)
+    )
+    _lo = _summary["cliff RMSE"].min()
+    _hi = _summary["cliff RMSE"].max()
+    _verdict = mo.md(
+        f"**No combination cracks it.** Across all six fingerprint×head combos, "
+        f"mean cliff RMSE stays in a tight **{_lo:.2f}–{_hi:.2f}** log-unit band. "
+        f"The learned fingerprint doesn't beat the classical one on cliffs, and "
+        f"neither a similarity read-out (kNN) nor a nonlinear net (MLP) helps — "
+        f"because a head only ever sees the representation, and two cliff "
+        f"molecules land at nearly the *same point* in any 2D-structure "
+        f"embedding. You can't un-collapse them downstream.\n\n"
+        f"**The important caveat — and the real point.** This tests CheMeleon as "
+        f"a *frozen* fingerprint. Fine-tune the whole message-passing network "
+        f"**end-to-end** on a target and it *can* score well on cliff benchmarks "
+        f"like MoleculeACE — but that's the tell, not a refutation: you're no "
+        f"longer using a fixed representation, you're *learning a new one per "
+        f"task*, letting it carve apart molecules a generic encoding collapses. "
+        f"Deep learning didn't repeal the limitation of static fingerprints; it "
+        f"made the representation itself trainable. As a **static** fingerprint, "
+        f"learned or hand-designed, the cliff stays invisible."
+    ).callout(kind="info")
+    mo.vstack(
+        [
+            mo.md(
+                "**Cliff-pair RMSE by fingerprint and head** (mean over the four "
+                "binding endpoints; MoleculeACE train/test split):"
+            ),
+            mo.as_html(_chart),
+            _verdict,
+            mo.md("---"),
         ]
-        _pool = _blind or _gal
-        _cl = max(_pool, key=lambda c: c["gap"])
-        _probe = pc.probe_pair(_cl["smiles_1"], _cl["smiles_2"], _cl["gap"])
-        _m1 = _Chem.MolFromSmiles(_cl["smiles_1"])
-        _m2 = _Chem.MolFromSmiles(_cl["smiles_2"])
-
-        def _panel(mol, probe_logp, label, logs):
-            svg = pc.logp_heatmap_svg(mol, width=300, height=220)
-            return mo.vstack(
-                [
-                    mo.md(
-                        f"<div style='text-align:center'><b>{label}</b><br>"
-                        f"logP <b>{probe_logp:.2f}</b> · measured logS "
-                        f"<b>{logs:.1f}</b></div>"
-                    ),
-                    mo.Html(svg),
-                ]
-            )
-
-        # Which lens 'sees' the cliff? (larger normalised delta = sees more)
-        _lens_rows = mo.md(
-            "| lens | what it measures | reads this pair as |\n"
-            "|---|---|---|\n"
-            f"| **ECFP4** | substructure similarity | "
-            f"Tanimoto **{_probe.tanimoto:.2f}** — *identical* ❌ |\n"
-            f"| **TPSA** | polar surface area | "
-            f"Δ **{_probe.d_tpsa:.1f}** — *identical* ❌ |\n"
-            f"| **H-bond donors** | counting | "
-            f"Δ **{_probe.d_hbd}** — *identical* ❌ |\n"
-            f"| **Crippen logP** | accumulated hydrophobicity | "
-            f"Δ **{_probe.d_logp:.1f}** — *sees it* ✅ |\n"
-            f"| *(truth)* | *measured solubility* | "
-            f"*Δ logS {_probe.measured_gap:.1f} — ~{10 ** _probe.measured_gap:,.0f}×* |"
-        )
-        _verdict = mo.md(
-            f"Same scaffold, one longer alkyl chain. Every **similarity** lens "
-            f"(ECFP, TPSA, HBD) reports **no difference** — they only see which "
-            f"pieces are present, and the pieces are the same. But **logP**, an "
-            f"accumulated *physical* quantity rather than a similarity, moves by "
-            f"**{_probe.d_logp:.1f} units** and tracks the real "
-            f"~{10 ** _probe.measured_gap:,.0f}× solubility drop. This doesn't "
-            f"contradict the impossibility result — it *confirms* it: to see the "
-            f"cliff you had to compute something the fingerprint deliberately "
-            f"discards."
-        ).callout(kind="success")
-        physchem_view = mo.vstack(
-            [
-                mo.hstack(
-                    [
-                        _panel(_m1, _probe.logp_1, "shorter chain", _cl["act_1"]),
-                        _panel(_m2, _probe.logp_2, "longer chain", _cl["act_2"]),
-                    ],
-                    widths=[1, 1], gap=2, justify="center",
-                ),
-                mo.md(
-                    "<div style='text-align:center;color:#868e96;font-size:12px'>"
-                    "atoms colored by per-atom logP contribution — "
-                    "<span style='color:#2b8a3e'>green = hydrophobic</span>, "
-                    "<span style='color:#c2255c'>pink = polar</span></div>"
-                ),
-                _lens_rows,
-                _verdict,
-                mo.md(
-                    "*Honest limits: logP is a cheap empirical model, not a "
-                    "solubility predictor — it happens to expose *this* family of "
-                    "cliffs because they're hydrophobicity-driven. Other solubility "
-                    "cliffs (a tautomer, a buried charge, a polymorph) would need "
-                    "the heavier context-dependent physics — 3D conformers, "
-                    "explicit or implicit solvation, quantum-mechanical energies — "
-                    "each far more expensive per molecule and still no guarantee. "
-                    "The point isn't logP; it's "
-                    "that escaping a cliff always costs you computation the "
-                    "fingerprint skipped.*"
-                ),
-                mo.md("---"),
-            ]
-        )
-    physchem_view
+    )
+    return
 
 
 @app.cell
 def _(mo):
     mo.md(r"""
-    ### Appetizer 2 — binding: a clue, not a cure
+    ### Leave fingerprints behind and look in the pocket
 
-    On the binding side, a cliff is a fact about what the molecule *does in the
-    pocket* — so the quantity to compute is the **3D interaction**, not the 2D
-    graph. Below, we fold each ligand into the pocket with **Boltz**, detect
-    its contacts with **PLIP**, and read an *interaction* fingerprint off the
-    pose — bits that are physical contacts, not graph fragments.
+    If the signal isn't in *any* 2D-structure fingerprint, we need to try computation that's more information-rich, but harder to pul off. In this case, what we're going to look at is the **3D interactions** between molecule and protein in the binding pocket, not the
+    2D graph. Below, we fold each ligand into the pocket with **Boltz**, detect
+    its contacts with **PLIP**, and read an interaction fingerprint off the
+    pose.
 
-    Be clear-eyed about what this is and isn't:
+    Let's be honest about what this is and isn't:
 
     - It's a **clue in a direction**, not a general fix. For the μ-opioid pair
-      it points at a plausible cause (a single extra H-bond); for others it
-      barely moves the needle.
+      it points at a plausible cause (a single extra H-bond); for other datasets it is even less clear if the Boltz prediction can explain the experimental data.
     - These are **predicted** poses — binding-mode *hypotheses*, not
       experimental structures — for a **handful** of curated pairs. A
-      qualitative contrast, never a benchmark.
+      qualitative contrast, not a benchmark or validated hypothesis.
     - Making this a real method would need **more data** and **local context in
       both spaces at once**: nearby chemical structure *and* nearby protein
       structure. Activity cliffs stay an open, actively-researched problem.
 
-    With that framing, here's the appetizer.
+    With those caveats in advance, here's the demonstration.
     """)
+    return
 
 
 @app.cell
@@ -2060,6 +2246,7 @@ def _(cliff_choice, ctx, cv, mo, target_pair_choice):
             ]
         )
     mo.vstack([_view, mo.md("---")])
+    return
 
 
 @app.cell
@@ -2157,6 +2344,7 @@ def _(cliff_choice, ctx, mo, target_pair_choice):
             ]
         )
     mo.vstack([_view, mo.md("---")])
+    return
 
 
 @app.cell
@@ -2166,25 +2354,21 @@ def _(mo):
 
     ### About this notebook
 
-    **AI use (disclosed per competition guidelines).** This notebook was built in
+    **AI use:** This notebook was built in
     a pairing session with an AI coding assistant: it helped scaffold the marimo
-    cells, the custom `ComplexViewer` anywidget, and the analysis scripts, and
-    drafted the prose. Every chemical claim, data source, and result was
-    reviewed by a human; the AI wrote no chemistry it wasn't checked on.
+    cells, the custom `ComplexViewer` anywidget, and the analysis scripts, work through experiments, and write early drafts of the prose. Every chemical claim, data source, and result was
+    reviewed; the majority of prose was overwritten by Raymond Gasper.
 
-    **Chemistry & validity.** All structure handling runs through **RDKit**.
-    SMILES are validated on input and invalid structures are handled gracefully
-    — no cell throws on bad input. Binding data are from **MoleculeACE**
+    All chemical structure handling runs through **RDKit**. Binding data are from **MoleculeACE**
     (curated ChEMBL bioactivities with published activity-cliff labels); the
     **ADMET** data (aqueous solubility from **AqSolDB**, lipophilicity from
     **AstraZeneca**) come from **Therapeutics Data Commons**, where we strip
     salts, keep the largest organic fragment, and de-duplicate by canonical
     parent SMILES before analysis. Every train/test split — for the learned
-    model and the ADMET census alike — is a **Bemis–Murcko scaffold split**, so
-    near-duplicate structures never straddle train and test (no leakage). 3D
+    model and the ADMET census alike — is a **Bemis–Murcko scaffold split** - I'm aware that this has limitations and may not be the most rigorous way to do a chemical dataset splitting, but didn't want to get overly complex just for the demonstrations. 3D
     complexes are **Boltz-2** predictions — framed throughout as *hypotheses*,
     not experimental structures — and protein–ligand interactions are detected
-    with **PLIP**. Predicted poses are never presented as ground truth.
+    with **PLIP**.
 
     **Reproducibility.** Heavy compute (folding, interaction detection, model
     training) runs offline and is cached in `data/`; the notebook only reads
@@ -2196,6 +2380,7 @@ def _(mo):
     3Dmol.js · Altair · marimo. Thanks to OpenADMET and the
     marimo team for the competition.
     """)
+    return
 
 
 if __name__ == "__main__":
