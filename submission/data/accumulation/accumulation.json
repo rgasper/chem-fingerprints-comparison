@@ -1,0 +1,207 @@
+{
+  "n_molecules": 4000,
+  "survey_n": {
+    "accumulator": 4000,
+    "binding": 2500
+  },
+  "scores": {
+    "heavy-atom count": [
+      {
+        "key": "binary_linear",
+        "label": "binary Morgan + linear",
+        "family": "binary",
+        "r2": 0.7579856431733505
+      },
+      {
+        "key": "count_linear",
+        "label": "count Morgan + linear",
+        "family": "count",
+        "r2": 0.9991600928901576
+      },
+      {
+        "key": "binary_mlp",
+        "label": "binary Morgan + deep MLP (48\u00d74)",
+        "family": "binary",
+        "r2": 0.7588518144668134
+      },
+      {
+        "key": "chemeleon_linear",
+        "label": "CheMeleon (learned) + linear",
+        "family": "learned",
+        "r2": 0.928723814938033
+      }
+    ],
+    "aqueous solubility": [
+      {
+        "key": "binary_linear",
+        "label": "binary Morgan + linear",
+        "family": "binary",
+        "r2": 0.47525211714934346
+      },
+      {
+        "key": "count_linear",
+        "label": "count Morgan + linear",
+        "family": "count",
+        "r2": 0.5028681638571691
+      },
+      {
+        "key": "binary_mlp",
+        "label": "binary Morgan + deep MLP (48\u00d74)",
+        "family": "binary",
+        "r2": 0.4399971653610756
+      },
+      {
+        "key": "chemeleon_linear",
+        "label": "CheMeleon (learned) + linear",
+        "family": "learned",
+        "r2": 0.6577322130412598
+      }
+    ]
+  },
+  "survey": [
+    {
+      "fingerprint": "Morgan (ECFP4)",
+      "encoding": "binary",
+      "target": "heavy-atom count",
+      "r2": 0.7463482288111511
+    },
+    {
+      "fingerprint": "Morgan (ECFP4)",
+      "encoding": "binary",
+      "target": "aqueous solubility",
+      "r2": 0.38079534943836435
+    },
+    {
+      "fingerprint": "Morgan (ECFP4)",
+      "encoding": "binary",
+      "target": "Dopamine D3 (pKi)",
+      "r2": 0.4878957755793336
+    },
+    {
+      "fingerprint": "Morgan (ECFP4)",
+      "encoding": "count",
+      "target": "heavy-atom count",
+      "r2": 0.9991399034400621
+    },
+    {
+      "fingerprint": "Morgan (ECFP4)",
+      "encoding": "count",
+      "target": "aqueous solubility",
+      "r2": 0.37105783129640235
+    },
+    {
+      "fingerprint": "Morgan (ECFP4)",
+      "encoding": "count",
+      "target": "Dopamine D3 (pKi)",
+      "r2": 0.4469616630398239
+    },
+    {
+      "fingerprint": "RDKit topological",
+      "encoding": "binary",
+      "target": "heavy-atom count",
+      "r2": 0.7283572797203506
+    },
+    {
+      "fingerprint": "RDKit topological",
+      "encoding": "binary",
+      "target": "aqueous solubility",
+      "r2": 0.4783932361214006
+    },
+    {
+      "fingerprint": "RDKit topological",
+      "encoding": "binary",
+      "target": "Dopamine D3 (pKi)",
+      "r2": 0.44623787271957593
+    },
+    {
+      "fingerprint": "RDKit topological",
+      "encoding": "count",
+      "target": "heavy-atom count",
+      "r2": 0.9466916803133063
+    },
+    {
+      "fingerprint": "RDKit topological",
+      "encoding": "count",
+      "target": "aqueous solubility",
+      "r2": 0.42087072057258623
+    },
+    {
+      "fingerprint": "RDKit topological",
+      "encoding": "count",
+      "target": "Dopamine D3 (pKi)",
+      "r2": 0.3990318420239415
+    },
+    {
+      "fingerprint": "atom-pair",
+      "encoding": "binary",
+      "target": "heavy-atom count",
+      "r2": 0.9827507022215158
+    },
+    {
+      "fingerprint": "atom-pair",
+      "encoding": "binary",
+      "target": "aqueous solubility",
+      "r2": 0.47794264722529833
+    },
+    {
+      "fingerprint": "atom-pair",
+      "encoding": "binary",
+      "target": "Dopamine D3 (pKi)",
+      "r2": 0.43315496811762577
+    },
+    {
+      "fingerprint": "atom-pair",
+      "encoding": "count",
+      "target": "heavy-atom count",
+      "r2": 0.9859368139495589
+    },
+    {
+      "fingerprint": "atom-pair",
+      "encoding": "count",
+      "target": "aqueous solubility",
+      "r2": 0.4149073168933346
+    },
+    {
+      "fingerprint": "atom-pair",
+      "encoding": "count",
+      "target": "Dopamine D3 (pKi)",
+      "r2": 0.36004692766091184
+    },
+    {
+      "fingerprint": "topological torsion",
+      "encoding": "binary",
+      "target": "heavy-atom count",
+      "r2": 0.9174338047825625
+    },
+    {
+      "fingerprint": "topological torsion",
+      "encoding": "binary",
+      "target": "aqueous solubility",
+      "r2": 0.4056291041305271
+    },
+    {
+      "fingerprint": "topological torsion",
+      "encoding": "binary",
+      "target": "Dopamine D3 (pKi)",
+      "r2": 0.4232291366375155
+    },
+    {
+      "fingerprint": "topological torsion",
+      "encoding": "count",
+      "target": "heavy-atom count",
+      "r2": 0.9633977941693431
+    },
+    {
+      "fingerprint": "topological torsion",
+      "encoding": "count",
+      "target": "aqueous solubility",
+      "r2": 0.3802694259745697
+    },
+    {
+      "fingerprint": "topological torsion",
+      "encoding": "count",
+      "target": "Dopamine D3 (pKi)",
+      "r2": 0.347884293306963
+    }
+  ]
+}

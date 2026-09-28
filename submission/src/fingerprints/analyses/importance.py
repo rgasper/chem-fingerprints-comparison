@@ -30,6 +30,7 @@ from fingerprints import chemeleon_fp as chf
 RDLogger.DisableLog("rdApp.*")
 
 from fingerprints import paths
+from fingerprints.data import context_cliffs as ctx
 from fingerprints.data import molace
 
 CACHE_MOLACE = paths.CACHE_DIR / "molace"
@@ -96,13 +97,14 @@ def train_one(X, y, seed=0):
     rf = RandomForestRegressor(n_estimators=RF_TREES, n_jobs=-1, random_state=seed)
     rf.fit(Xtr, ytr)
     yp = rf.predict(Xte)
-    return {
+    stats = {
         "importances": rf.feature_importances_.astype(float).tolist(),
         "r2": r2(yte, yp),
         "rmse": rmse(yte, yp),
         "n_train": len(ytr),
         "n_test": len(yte),
     }
+    return rf, stats
 
 
 def _ensure_molace(dataset: str):
@@ -134,8 +136,10 @@ def main(out_dir=None, on_step=None):
         logger.info("  building CheMeleon matrix (forward passes)")
         Xc = chemeleon_matrix(smiles)
         logger.info("  training RFs")
-        ecfp = train_one(Xe, y)
-        chem = train_one(Xc, y)
+        rf_e, ecfp = train_one(Xe, y)
+        rf_c, chem = train_one(Xc, y)
+        ecfp["predictions"] = _predict_curated(rf_e, label, "ecfp")
+        chem["predictions"] = _predict_curated(rf_c, label, "chemeleon")
         logger.info(
             f"  ECFP: R2={ecfp['r2']:.3f} RMSE={ecfp['rmse']:.3f} | "
             f"CheMeleon: R2={chem['r2']:.3f} RMSE={chem['rmse']:.3f}"
@@ -145,6 +149,36 @@ def main(out_dir=None, on_step=None):
     path.write_text(json.dumps(out))
     logger.info(f"wrote {path} ({path.stat().st_size / 1e6:.1f} MB)")
     return path
+
+
+def curated_smiles_for(label: str) -> list[str]:
+    """Canonical SMILES of every curated cliff molecule that involves this
+    endpoint (so we can cache the model's prediction for each)."""
+    smis: list[str] = []
+    seen: set[str] = set()
+    for tp in ctx.TARGET_PAIRS:
+        if label not in (tp.target_a, tp.target_b):
+            continue
+        for c in tp.cliffs:
+            for s in (c.smiles_1, c.smiles_2):
+                mol = Chem.MolFromSmiles(s)
+                if mol is None:
+                    continue
+                cs = Chem.MolToSmiles(mol)
+                if cs not in seen:
+                    seen.add(cs)
+                    smis.append(cs)
+    return smis
+
+
+def _predict_curated(rf, label: str, fp: str) -> dict[str, float]:
+    """Predicted pKi for each curated cliff molecule, keyed by canonical SMILES."""
+    smis = curated_smiles_for(label)
+    if not smis:
+        return {}
+    X = ecfp_matrix(smis) if fp == "ecfp" else chemeleon_matrix(smis)
+    preds = rf.predict(X)
+    return {s: float(p) for s, p in zip(smis, preds)}
 
 
 def endpoint_labels() -> list[str]:

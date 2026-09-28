@@ -189,6 +189,8 @@ def target_labels() -> list[str]:
 
 
 def n_molecules() -> int:
+    if has_data():
+        return _cache()["n_molecules"]
     return len(_dataset()[0])
 
 
@@ -221,6 +223,21 @@ def _mlp_r2(x, y, tr, te, *, depth: int, width: int) -> float:
 
 @lru_cache(maxsize=8)
 def scores(target: str, depth: int = 4, width: int = 48) -> tuple[ModelScore, ...]:
+    """Held-out R² for every encoding/head on ``target``.
+
+    Reads the shipped cache under ``data/`` when present (instant); otherwise
+    fits live. Regenerate with ``python -m fingerprints.accumulation``.
+    """
+    if has_data():
+        return tuple(
+            ModelScore(**d) for d in _cache()["scores"].get(target, [])
+        )
+    return _scores_live(target, depth=depth, width=width)
+
+
+def _scores_live(
+    target: str, depth: int = 4, width: int = 48
+) -> tuple[ModelScore, ...]:
     """Fit every encoding/head on ``target`` and return held-out R² for each.
 
     Linear heads use RidgeCV (fair, auto-tuned regularisation); CheMeleon's
@@ -360,6 +377,8 @@ def survey_fingerprints() -> list[str]:
 
 def survey_n() -> dict[str, int]:
     """Molecule counts backing each target family."""
+    if has_data():
+        return _cache()["survey_n"]
     return {
         "accumulator": len(_dataset()[0]),
         "binding": len(_binding_dataset()[0]),
@@ -368,6 +387,17 @@ def survey_n() -> dict[str, int]:
 
 @lru_cache(maxsize=1)
 def survey() -> tuple[SurveyCell, ...]:
+    """binary vs count for every classical fingerprint on all survey targets.
+
+    Reads the shipped cache under ``data/`` when present (instant); otherwise
+    fits live. Regenerate with ``python -m fingerprints.accumulation``.
+    """
+    if has_data():
+        return tuple(SurveyCell(**d) for d in _cache()["survey"])
+    return _survey_live()
+
+
+def _survey_live() -> tuple[SurveyCell, ...]:
     """binary vs count for every classical fingerprint on all survey targets.
 
     ADMET targets (heavy-atom count, solubility) share the AqSolDB molecule set
@@ -417,3 +447,49 @@ def count_minus_binary(target: str) -> list[tuple[str, float]]:
         if b is not None and c is not None:
             deltas.append((fp, c - b))
     return deltas
+
+
+# ---------------------------------------------------------------------------
+# Disk cache: all live fits (scores over every target + the survey grid) are
+# precomputed and shipped under data/ so the notebook loads instantly. Rebuild
+# with ``python -m fingerprints.accumulation``.
+# ---------------------------------------------------------------------------
+
+
+def has_data() -> bool:
+    return paths.ACCUMULATION.exists()
+
+
+@lru_cache(maxsize=1)
+def _cache() -> dict:
+    import json
+
+    return json.loads(paths.ACCUMULATION.read_text())
+
+
+def main() -> None:
+    """Fit everything live and write the JSON cache read by :func:`scores`,
+    :func:`survey`, :func:`n_molecules`, and :func:`survey_n`."""
+    import json
+    from dataclasses import asdict
+
+    payload = {
+        "n_molecules": len(_dataset()[0]),
+        "survey_n": {
+            "accumulator": len(_dataset()[0]),
+            "binding": len(_binding_dataset()[0]),
+        },
+        "scores": {
+            target: [asdict(s) for s in _scores_live(target)]
+            for target in target_labels()
+        },
+        "survey": [asdict(c) for c in _survey_live()],
+    }
+    paths.ACCUMULATION.parent.mkdir(parents=True, exist_ok=True)
+    paths.ACCUMULATION.write_text(json.dumps(payload, indent=2))
+    n = sum(len(v) for v in payload["scores"].values()) + len(payload["survey"])
+    print(f"wrote {n} fits -> {paths.ACCUMULATION}")
+
+
+if __name__ == "__main__":
+    main()

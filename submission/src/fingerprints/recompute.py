@@ -45,6 +45,13 @@ def _run_importance(report: Callable[[str], None]) -> None:
     importance.main(out_dir=paths.IMPORTANCE.parent, on_step=lambda lbl: report(lbl))
 
 
+def _run_learned_cliffs(report: Callable[[str], None]) -> None:
+    from fingerprints import learned_cliffs
+
+    report("training {ECFP, CheMeleon} × {linear, kNN, MLP} on binding endpoints")
+    learned_cliffs.main()
+
+
 def _run_weights(report: Callable[[str], None]) -> None:
     from fingerprints import chemeleon_fp as chf
 
@@ -59,11 +66,17 @@ def steps() -> list[Step]:
         Step("ADMET cliff census (TDC + OpenADMET)", _run_admet),
         Step("kNN cliff analysis", _run_knn),
         Step("Feature-importance models (CheMeleon — slow)", _run_importance),
+        Step("Learned-fingerprint cliff head-sweep", _run_learned_cliffs),
     ]
 
 
 def clear_outputs() -> None:
     """Delete the precomputed JSONs so the rebuild is a true from-scratch run."""
-    for p in (paths.ADMET_CLIFFS, paths.KNN_CLIFFS, paths.IMPORTANCE):
+    for p in (
+        paths.ADMET_CLIFFS,
+        paths.KNN_CLIFFS,
+        paths.IMPORTANCE,
+        paths.LEARNED_CLIFFS,
+    ):
         if p.exists():
             p.unlink()

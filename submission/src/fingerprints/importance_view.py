@@ -43,6 +43,12 @@ def has_data() -> bool:
     return CACHE.exists()
 
 
+def config() -> dict:
+    """Training hyperparameters stored in the cache (n_bits, rf_trees)."""
+    d = _data()
+    return {"n_bits": d["n_bits"], "rf_trees": d["rf_trees"]}
+
+
 def endpoints() -> list[str]:
     return list(_data()["endpoints"].keys()) if has_data() else []
 
@@ -56,6 +62,13 @@ def importances(endpoint: str, fp: str) -> np.ndarray:
 def metrics(endpoint: str, fp: str) -> dict:
     d = _data()["endpoints"][endpoint][fp]
     return {"r2": d["r2"], "rmse": d["rmse"], "n_train": d["n_train"], "n_test": d["n_test"]}
+
+
+def predict(endpoint: str, fp: str, mol: Chem.Mol) -> float | None:
+    """Cached RF prediction (pKi) for a curated cliff molecule, looked up by
+    canonical SMILES. Returns None if this molecule wasn't precomputed."""
+    preds = _data()["endpoints"][endpoint][fp].get("predictions", {})
+    return preds.get(Chem.MolToSmiles(mol))
 
 
 # ---- per-atom importance ------------------------------------------------
@@ -95,6 +108,87 @@ def atom_importance(mol: Chem.Mol, endpoint: str, fp: str) -> np.ndarray:
     return atom_importance_chemeleon(mol, imp)
 
 
+def atom_importance_diff(
+    mol: Chem.Mol, ep_a: str, ep_b: str, fp: str
+) -> np.ndarray:
+    """Per-atom *change* in model attention between two endpoints:
+    importance(ep_a) - importance(ep_b), each L1-normalised first so the two
+    endpoints are on the same scale. Positive => the atom matters more for
+    ep_a's model; negative => more for ep_b's."""
+    wa = atom_importance(mol, ep_a, fp)
+    wb = atom_importance(mol, ep_b, fp)
+    sa = wa.sum() or 1.0
+    sb = wb.sum() or 1.0
+    return wa / sa - wb / sb
+
+
+def importance_diff_stats(
+    mol: Chem.Mol, ep_a: str, ep_b: str, fp: str, changed: list[int]
+) -> dict:
+    """Quantify whether the model even *notices* the target swap, and whether
+    the change it makes lands on the atoms that actually cause the cliff.
+
+    All quantities are RANK-based so they match what the (autoscaled) diff
+    heatmap actually emphasises: the heatmap saturates on the largest-magnitude
+    atoms, so we characterise *where the biggest shifts are*, not the raw total.
+
+    Returns:
+      total_shift: sum |diff| of L1-normalised attention (0 => identical,
+        ~2 => disjoint). Kept for reference; NOT foregrounded because it's a
+        global sum the eye can't read off the map.
+      peak_atom: index of the single largest-shift atom (the one the heatmap
+        lights up most strongly).
+      peak_on_changed: True if that peak atom is one of the changed atoms.
+      top_k: how many top movers we consider (== number of changed atoms,
+        so a fair "did the shift concentrate on the change?" test).
+      top_hits: of those top_k biggest-shift atoms, how many are changed atoms.
+    """
+    diff = np.abs(atom_importance_diff(mol, ep_a, ep_b, fp))
+    order = np.argsort(diff)[::-1]
+    changed_set = set(changed)
+    k = max(len(changed), 1)
+    top = order[:k]
+    return {
+        "total_shift": float(diff.sum()),
+        "peak_atom": int(order[0]),
+        "peak_on_changed": bool(order[0] in changed_set),
+        "top_k": k,
+        "top_hits": int(sum(1 for a in top if a in changed_set)),
+        "n_changed": len(changed),
+    }
+
+
+def importance_diff_heatmap_svg(
+    mol: Chem.Mol,
+    ep_a: str,
+    ep_b: str,
+    fp: str,
+    *,
+    width: int = 300,
+    height: int = 220,
+) -> str:
+    """Diverging heatmap of the per-atom attention *difference* between the two
+    endpoints' models (red = leans more on this atom for ep_a; blue = for
+    ep_b). A near-blank map means the static fingerprint barely re-weights
+    anything when the target changes."""
+    w = atom_importance_diff(mol, ep_a, ep_b, fp)
+    d = rdMolDraw2D.MolDraw2DSVG(width, height)
+    d.drawOptions().addStereoAnnotation = False
+    if mol.GetNumAtoms() < 2 or float(np.ptp(w)) == 0.0:
+        rdMolDraw2D.PrepareAndDrawMolecule(d, mol)
+        d.FinishDrawing()
+        return d.GetDrawingText()
+    SimilarityMaps.GetSimilarityMapFromWeights(
+        mol,
+        [float(x) for x in w],
+        draw2d=d,
+        contourLines=3,
+        gridResolution=0.45,
+    )
+    d.FinishDrawing()
+    return d.GetDrawingText()
+
+
 def importance_heatmap_svg(
     mol: Chem.Mol, endpoint: str, fp: str, *, width: int = 420, height: int = 320
 ) -> str:
@@ -113,8 +207,8 @@ def importance_heatmap_svg(
         mol,
         [float(x) for x in w],
         draw2d=d,
-        contourLines=5,
-        gridResolution=0.3,
+        contourLines=3,
+        gridResolution=0.45,
     )
     d.FinishDrawing()
     return d.GetDrawingText()

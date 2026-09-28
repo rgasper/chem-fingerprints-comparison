@@ -145,8 +145,30 @@ def fingerprints() -> list[str]:
 @lru_cache(maxsize=1)
 def results() -> tuple[CliffFit, ...]:
     """Cliff vs non-cliff held-out RMSE for {ECFP, CheMeleon} x {linear, kNN,
-    MLP}, every endpoint. The head sweep asks whether *any* decision head on a
-    frozen fingerprint can recover the cliff."""
+    MLP}, every endpoint. Reads the precomputed cache under ``data/`` when it
+    exists (instant); otherwise trains live (~50 s) and is memoised for the
+    session. Regenerate the cache with ``python -m fingerprints.learned_cliffs``
+    (or via the from-scratch recompute path)."""
+    if has_data():
+        return _load_cache()
+    return _compute()
+
+
+def has_data() -> bool:
+    return paths.LEARNED_CLIFFS.exists()
+
+
+def _load_cache() -> tuple[CliffFit, ...]:
+    import json
+
+    rows = json.loads(paths.LEARNED_CLIFFS.read_text())
+    return tuple(CliffFit(**r) for r in rows)
+
+
+def _compute() -> tuple[CliffFit, ...]:
+    """Train every {fingerprint, head} combo on every endpoint (the ~50 s live
+    path). Kept separate from :func:`results` so the cache writer can call it
+    directly."""
     from fingerprints import chemeleon_fp as chf
 
     out: list[CliffFit] = []
@@ -175,6 +197,21 @@ def results() -> tuple[CliffFit, ...]:
                     )
                 )
     return tuple(out)
+
+
+def main() -> None:
+    """Train everything and write the JSON cache read by :func:`results`."""
+    import json
+    from dataclasses import asdict
+
+    rows = [asdict(r) for r in _compute()]
+    paths.LEARNED_CLIFFS.parent.mkdir(parents=True, exist_ok=True)
+    paths.LEARNED_CLIFFS.write_text(json.dumps(rows, indent=2))
+    print(f"wrote {len(rows)} rows -> {paths.LEARNED_CLIFFS}")
+
+
+if __name__ == "__main__":
+    main()
 
 
 def mean_cliff_rmse(fingerprint: str, head: str) -> float:

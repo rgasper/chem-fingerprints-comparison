@@ -57,6 +57,15 @@ class ContextCliff:
     def flat_on(self) -> str:
         return self.target_b if self.delta_a >= self.delta_b else self.target_a
 
+    def actual_pki(self, mol_index: int, target: str) -> float:
+        """Measured pKi for molecule 1 or 2 (``mol_index`` in {1, 2}) on the
+        given target label."""
+        if target == self.target_a:
+            return self.pki_1_a if mol_index == 1 else self.pki_2_a
+        if target == self.target_b:
+            return self.pki_1_b if mol_index == 1 else self.pki_2_b
+        raise KeyError(target)
+
 
 @dataclass(frozen=True)
 class TargetPair:
@@ -170,3 +179,25 @@ TARGET_PAIRS: tuple[TargetPair, ...] = (D3_D4, MU_KAPPA)
 
 def by_key() -> dict[str, TargetPair]:
     return {tp.key: tp for tp in TARGET_PAIRS}
+
+
+def pair_options() -> dict[str, str]:
+    """Dropdown options mapping human label -> target-pair key."""
+    return {f"{tp.target_a} vs {tp.target_b}": tp.key for tp in TARGET_PAIRS}
+
+
+def cliff_options(pair_key: str) -> dict[str, int]:
+    """Dropdown options mapping cliff label -> index, for one target pair."""
+    tp = by_key()[pair_key]
+    return {
+        f"{c.change}  \u2014  cliff on {c.cliff_on}": i
+        for i, c in enumerate(tp.cliffs)
+    }
+
+
+def clamp_cliff_idx(pair_key: str, idx: int) -> int:
+    """Keep a cliff index valid when the selected target pair changes."""
+    n = len(by_key()[pair_key].cliffs)
+    if n == 0:
+        return 0
+    return max(0, min(idx, n - 1))
