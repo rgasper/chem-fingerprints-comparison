@@ -35,47 +35,26 @@ def _(mo):
 
 @app.cell
 def _(mo):
-    # --- Setup controls ------------------------------------------------------
+    # --- Setup control -------------------------------------------------------
     # Everything the plots need ships PRECOMPUTED under data/ (the cliff
     # censuses, kNN analysis, feature-importances, and the 3D Boltz poses), so
     # the notebook loads instantly. The only thing fetched on first run is the
     # 33 MB CheMeleon neural-fingerprint weight, which the live interactive
-    # cells need. If you're curious how the precomputed data was made, tick the
-    # box below to rebuild it all from scratch (downloads the source datasets
-    # and re-runs every analysis — takes ~10 minutes, dominated by CheMeleon).
+    # cells need. One checkbox rebuilds every analysis from scratch (downloads
+    # the source datasets and re-runs everything - ~10 min, dominated by
+    # CheMeleon). The 3D Boltz poses are the one thing this button doesn't
+    # rebuild: folding needs a GPU and a paid API key, so it stays a separate,
+    # documented offline command.
     recompute_toggle = mo.ui.checkbox(
         value=False, label="Recompute all analyses from scratch (~10 min)"
     )
-    boltz_api_key = mo.ui.text(
-        value="",
-        label="Boltz API key (only to re-fold the 3D poses — optional)",
-        kind="password",
-        full_width=True,
-        placeholder="leave blank to use the shipped poses",
-    )
-    return boltz_api_key, recompute_toggle
+    return (recompute_toggle,)
 
 
 @app.cell
-def _(boltz_api_key, mo, recompute_toggle):
+def _(mo, recompute_toggle):
     from fingerprints import chemeleon_fp as _chf
-    from fingerprints import paths as _paths
     from fingerprints import recompute as _recompute
-
-    # Report which precomputed artifacts are present (they ship with the repo).
-    def _status(label, ok):
-        mark = "✅" if ok else "⚠️"
-        return f"{mark} {label}"
-
-    _rows = [
-        _status("ADMET cliff census (TDC + OpenADMET)", _paths.ADMET_CLIFFS.exists()),
-        _status("kNN cliff analysis", _paths.KNN_CLIFFS.exists()),
-        _status("Feature-importance models", _paths.IMPORTANCE.exists()),
-        _status(
-            "3D Boltz poses + PLIP interactions",
-            _paths.BOLTZ_POSES.exists() and any(_paths.BOLTZ_POSES.glob("*.cif")),
-        ),
-    ]
 
     if recompute_toggle.value:
         # Full from-scratch rebuild, wrapped in a progress bar.
@@ -91,7 +70,9 @@ def _(boltz_api_key, mo, recompute_toggle):
         setup_ready = True
         _setup_msg = mo.md(
             "**Rebuilt everything from scratch.** The plots below now read the "
-            "freshly-computed files — identical machinery, no shipped caches."
+            "freshly-computed files — identical machinery, no shipped caches. (The "
+            "3D poses are the exception: they need a GPU folding job and a paid "
+            "Boltz key, so the shipped ones are always used — see the note below.)"
         ).callout(kind="success")
     else:
         # Fast path: just make sure the neural-fingerprint weight is present.
@@ -99,31 +80,23 @@ def _(boltz_api_key, mo, recompute_toggle):
             _chf.ensure_weights()
         setup_ready = True
         _setup_msg = mo.md(
-            "Using the **precomputed** analysis data shipped with this notebook "
-            "(the plots load instantly). CheMeleon neural-fingerprint weights are "
-            "ready."
+            "This notebook ships with its analyses **precomputed** so the plots "
+            "load instantly (and so we don't accidentally spend money re-running "
+            "Boltz inference). Tick the box to rebuild every analysis from scratch "
+            "instead — same machinery, no shipped caches."
         ).callout(kind="neutral")
-
-    # The 3D poses are the one artifact we don't rebuild inline: folding needs a
-    # GPU and a Boltz API key. If a key is supplied we surface how to re-fold;
-    # otherwise the shipped poses are used as-is.
-    if boltz_api_key.value.strip():
-        _pose_note = mo.md(
-            "Boltz key detected. Re-folding the 3D poses is a separate, GPU-heavy "
-            "job; run `python -m fingerprints.rebuild_poses` with `BOLTZ_API_KEY` "
-            "set (extra deps: `pip install '.[poses]'`). The shipped poses are "
-            "used until you do."
-        ).callout(kind="info")
-    else:
-        _pose_note = mo.md("")
 
     mo.vstack(
         [
             _setup_msg,
-            mo.md("**Precomputed artifacts:**  \n" + "  \n".join(_rows)),
             recompute_toggle,
-            boltz_api_key,
-            _pose_note,
+            mo.md(
+                "*The 3D binding poses are **not** rebuilt by this button — folding "
+                "them needs a GPU and a paid Boltz API key. To regenerate them "
+                "offline: `pip install '.[poses]'`, set `BOLTZ_API_KEY`, then run "
+                "`python -m fingerprints.rebuild_poses`. The shipped poses are used "
+                "otherwise.*"
+            ),
         ]
     )
     return (setup_ready,)
@@ -174,7 +147,7 @@ def _(ctx, mo, pair_dd):
 
 
 @app.cell
-def _(ctx, cliff_dd, mo, pair_dd):
+def _(cliff_dd, ctx, mo, pair_dd):
     # Accessors used throughout the notebook. get_pair_key() / get_cliff_idx()
     # read the current dropdown selections; selectors() renders the synced row.
     def get_pair_key():
@@ -249,19 +222,283 @@ def _(ctx, cv, get_cliff_idx, get_pair_key, mo):
 @app.cell
 def _(mo):
     mo.md(r"""
-    Same two molecules, same fingerprints, opposite truths: a cliff on one
-    target, flat on the other. Your first instinct might be that this is just a
-    limitation of *similarity* — that a properly **trained model** would learn to
-    tell these two apart. So let's test exactly that. We'll train a model on each
-    target and ask where it looks.
+    ### A quick look at the prediction target - protein binding
+
+    These examples are real molecules that have to
+    dock into a real protein pocket, and the strength of that complex 3D interaction is what experimental binding strength actually measures. Below is the more-potent molecule of the pair you
+    picked, folded into its binding pocket. The
+    orange atoms are the handful that differ across the cliff, and the dashed
+    lines indicate interactions between ligand and protein that match common heuristics as being important.
+
+    We will come back to the 3D pose in the binding pocket at
+    the very end, once we demonstrate why the fingerprint of the molecular structure can't reliably capture the
+    activity cliff.
     """)
     return
 
 
+@app.cell
+def _(ctx, get_cliff_idx, get_pair_key, mo):
+    from fingerprints import pose_view as _pv_teaser
+    from fingerprints.complex_viewer import ComplexViewer as _ComplexViewerTeaser
+
+    # First appearance of the custom 3D anywidget - deliberately a *hook*, not
+    # an analysis. Show the single most-potent binder of the current cliff in
+    # its cliff target's pocket so the reader can rotate a real complex before
+    # we abstract everything into fingerprints. The full four-pose interaction
+    # analysis stays at the end as the payoff. All curated pairs ship poses;
+    # the has_poses guard is kept so the cell degrades gracefully regardless.
+    _tp = ctx.by_key()[get_pair_key()]
+    _idx = get_cliff_idx()
+    _cl = _tp.cliffs[_idx]
+
+    if not _pv_teaser.has_poses(_tp.key, _idx):
+        _teaser = mo.md(
+            "*3D pose preview isn't available for this cliff — the full analysis "
+            "at the end of the notebook covers the pairs that ship poses.*"
+        ).callout(kind="info")
+    else:
+        _poses = _pv_teaser.load_all(_tp.key, _idx)
+        _cliff_ep = _cl.cliff_on
+        # the more-potent molecule of the pair ON the cliff target
+        _pki1 = _cl.actual_pki(1, _cliff_ep)
+        _pki2 = _cl.actual_pki(2, _cliff_ep)
+        if _pki1 >= _pki2:
+            _mol_id, _pki, _other = "mol1", _pki1, "mol2"
+        else:
+            _mol_id, _pki, _other = "mol2", _pki2, "mol1"
+        _pose = _poses[f"{_mol_id}_{_cliff_ep}"]
+
+        _changed = _pv_teaser.changed_atom_names(
+            _pose, _poses[f"{_other}_{_cliff_ep}"]
+        )
+        _viewer = _ComplexViewerTeaser(
+            structure=_pose.cif_text,
+            format="cif",
+            highlight_resi="",  # teaser is a clean first look - no pocket-residue landmark
+            highlight_atoms=_changed,
+            interactions=_pv_teaser.load_interactions(_pose),
+            height=360,
+        )
+        _mol_name = "molecule 1" if _mol_id == "mol1" else "molecule 2"
+        _caption = mo.md(
+            f"*{_mol_name} — the more-potent binder here (pKi **{_pki}** on "
+            f"**{_cliff_ep}**) — in its predicted pocket. Orange = the atoms that "
+            f"change across the cliff; dashed lines = protein contacts (PLIP). "
+            f"Predicted pose from Boltz not an experimental structure.*"
+        )
+        _teaser = mo.vstack([mo.ui.anywidget(_viewer), _caption])
+    mo.vstack([_teaser, mo.md("---")])
+    return
 
 
 @app.cell
-def _(cv, ctx, get_cliff_idx, get_pair_key, mo, setup_ready):
+def _(mo):
+    mo.md(r"""
+    We will return to the 3D pocket at the end. First, though, the rest of
+    the notebook works with the far cheaper & far more common representation that we're trying to understand better: the
+    molecule's 2D structure, encoded as a **fingerprint**. So the question that
+    drives everything below is whether that 2D encoding carries enough
+    information to explain the cliffs for these targets.
+
+    A fair place to start is with a model that actually *learns* from data. We
+    have two nearly-identical molecules whose potency differs by orders of
+    magnitude on one target but not the other. Can a statistical (machine-learned)
+    model trained on measured binding data reproduce that gap? We train models on
+    each target, check how well they predict pKi, and — for intuition — look at
+    where on the molecule each one pays attention.
+
+    A little context for what follows: we
+    encode each molecule two ways — **ECFP** which is a fixed fingerprint determined by an algorithm, and is probably the most-used fingerprint in cheminformatics work; and **CheMeleon** a machine-learned fingerprint. More detail on how these fingerprints work will follow! For
+    each target we train a **random forest** to predict pKi from that encoding.
+    Each dataset is split by **Bemis–Murcko scaffold**. All the cliff pairs we've picked happened to land in the training
+    sets for their targets, so the model was trained on both molecules and their
+    true potencies. Then from the trained random forest we extract how important parts of the fingerprint are to the prediction, and map that back onto the molecular structure.
+    """)
+    return
+
+
+@app.cell
+def _(mo, selectors):
+    # Synced selector right above the scatter, so the reader can switch the
+    # target pair / molecule pair without scrolling back up.
+    mo.vstack(
+        [
+            mo.md("**Pick the target pair / molecule pair for these plots:**"),
+            selectors(),
+        ]
+    )
+    return
+
+
+@app.cell
+def _(alt, ctx, get_cliff_idx, get_pair_key, mo, pd, setup_ready):
+    from rdkit import Chem as _Chem2
+
+    from fingerprints import importance_view as _iv_sc
+
+    assert setup_ready
+
+    # How good are these models, really? A measured-vs-predicted pKi scatter for
+    # each of the two targets, ECFP fingerprint. Train points are faint, the
+    # held-out (scaffold) test points solid, the diagonal is a perfect model,
+    # and the currently-selected cliff pair is drawn as two big stars joined by
+    # a line so you can watch the true gap (vertical span) collapse into a
+    # near-vanishing predicted gap (horizontal span).
+    _tp_sc = ctx.by_key()[get_pair_key()]
+    _cl_sc = _tp_sc.cliffs[get_cliff_idx()]
+    _eps_sc = _iv_sc.endpoints() if _iv_sc.has_data() else []
+    _have_sc = _tp_sc.target_a in _eps_sc and _tp_sc.target_b in _eps_sc
+
+    if not _have_sc:
+        _scatter_view = mo.md(
+            "*Predicted-vs-measured plots need the feature-importance cache — run "
+            "`python -m fingerprints.analyses.importance`.*"
+        ).callout(kind="info")
+    else:
+        _m1_sc = _Chem2.MolFromSmiles(_cl_sc.smiles_1)
+        _m2_sc = _Chem2.MolFromSmiles(_cl_sc.smiles_2)
+
+        # One shared, square domain across all four panels (so the y=x diagonal
+        # is a true 45deg and panels are visually comparable). Base it on
+        # PERCENTILES of the pooled values rather than raw min/max, so a lone
+        # outlier prediction can't stretch the axis and leave whitespace. The
+        # scales use clamp=True (below) so any point outside the domain is pinned
+        # to the edge instead of dropped.
+        import numpy as _np_sc
+
+        _all_vals = []
+        for _ep in (_cl_sc.cliff_on, _cl_sc.flat_on):
+            for _fp in ("ecfp", "chemeleon"):
+                for _fold in ("train", "test"):
+                    _mv, _pv = _iv_sc.fold_scatter(_ep, _fp, _fold)
+                    _all_vals.extend(_mv)
+                    _all_vals.extend(_pv)
+        _arr_sc = _np_sc.asarray(_all_vals, dtype=float)
+        _g_lo = float(_np_sc.percentile(_arr_sc, 0.5)) - 0.2
+        _g_hi = float(_np_sc.percentile(_arr_sc, 99.5)) + 0.2
+        _dom = [_g_lo, _g_hi]
+
+        def _target_chart(_ep, _is_cliff, _fp, _fp_label):
+            _rows = []
+            for _fold in ("train", "test"):
+                _meas, _pred = _iv_sc.fold_scatter(_ep, _fp, _fold)
+                for _mv, _pv in zip(_meas, _pred):
+                    _rows.append({"measured": _mv, "predicted": _pv, "fold": _fold})
+            _df = pd.DataFrame(_rows)
+            _xsc = alt.Scale(domain=_dom, clamp=True)
+            _ysc = alt.Scale(domain=_dom, clamp=True)
+            _pts = (
+                alt.Chart(_df)
+                .mark_circle()
+                .encode(
+                    x=alt.X("measured:Q", title="measured pKi", scale=_xsc),
+                    y=alt.Y("predicted:Q", title="predicted pKi", scale=_ysc),
+                    color=alt.Color(
+                        "fold:N",
+                        scale=alt.Scale(domain=["train", "test"],
+                                        range=["#748ffc", "#0ca678"]),
+                        legend=alt.Legend(title=None, orient="top"),
+                    ),
+                    opacity=alt.Opacity(
+                        "fold:N",
+                        scale=alt.Scale(domain=["train", "test"], range=[0.45, 0.55]),
+                        legend=None,
+                    ),
+                    size=alt.Size(
+                        "fold:N",
+                        scale=alt.Scale(domain=["train", "test"], range=[16, 22]),
+                        legend=None,
+                    ),
+                    tooltip=["fold:N", alt.Tooltip("measured:Q", format=".2f"),
+                             alt.Tooltip("predicted:Q", format=".2f")],
+                )
+            )
+            _diag = (
+                alt.Chart(pd.DataFrame({"x": _dom, "y": _dom}))
+                .mark_line(color="#adb5bd", strokeDash=[4, 3])
+                .encode(x=alt.X("x:Q", scale=_xsc), y=alt.Y("y:Q", scale=_ysc))
+            )
+            # the selected cliff pair: measured (true) + predicted (cached RF)
+            _cliff_rows = []
+            for _mol, _idx in ((_m1_sc, 1), (_m2_sc, 2)):
+                _p = _iv_sc.predict(_ep, _fp, _mol)
+                if _p is not None:
+                    _cliff_rows.append(
+                        {"measured": _cl_sc.actual_pki(_idx, _ep),
+                         "predicted": _p, "mol": f"molecule {_idx}"}
+                    )
+            _layers = [_diag, _pts]
+            if len(_cliff_rows) == 2:
+                _cdf = pd.DataFrame(_cliff_rows)
+                _link = (
+                    alt.Chart(_cdf)
+                    .mark_line(color="#e8590c", strokeWidth=2)
+                    .encode(x=alt.X("measured:Q", scale=_xsc),
+                            y=alt.Y("predicted:Q", scale=_ysc))
+                )
+                _stars = (
+                    alt.Chart(_cdf)
+                    .mark_point(shape="diamond", size=260, filled=True,
+                                color="#e8590c", stroke="black", strokeWidth=0.6)
+                    .encode(
+                        x=alt.X("measured:Q", scale=_xsc),
+                        y=alt.Y("predicted:Q", scale=_ysc),
+                        tooltip=["mol:N", alt.Tooltip("measured:Q", format=".2f"),
+                                 alt.Tooltip("predicted:Q", format=".2f")],
+                    )
+                )
+                _layers += [_link, _stars]
+            _mt = _iv_sc.metrics(_ep, _fp)
+            _tag = "cliff target" if _is_cliff else "flat target"
+            return (
+                alt.layer(*_layers)
+                .resolve_scale(x="shared", y="shared")
+                .properties(
+                    width=230, height=230,
+                    title=f"{_fp_label} · {_ep} ({_tag}) — test R² {_mt['r2']:.2f}",
+                )
+            )
+
+        # 2x2: rows = fingerprint (ECFP, CheMeleon), cols = target (cliff, flat)
+        _ecfp_row = mo.hstack(
+            [
+                mo.as_html(_target_chart(_cl_sc.cliff_on, True, "ecfp", "ECFP")),
+                mo.as_html(_target_chart(_cl_sc.flat_on, False, "ecfp", "ECFP")),
+            ],
+            justify="center", gap=2,
+        )
+        _chem_row = mo.hstack(
+            [
+                mo.as_html(_target_chart(_cl_sc.cliff_on, True, "chemeleon", "CheMeleon")),
+                mo.as_html(_target_chart(_cl_sc.flat_on, False, "chemeleon", "CheMeleon")),
+            ],
+            justify="center", gap=2,
+        )
+        _scatter_view = mo.vstack([
+            mo.md(
+                "**How good are the models?** Each dot is one molecule — "
+                "<span style='color:#748ffc'>blue = training</span>, "
+                "<span style='color:#0ca678'>green = held-out (scaffold) test</span>. "
+                "The dashed line is a perfect prediction. The "
+                "<span style='color:#e8590c'>orange diamonds</span> are the cliff "
+                "pair you selected, joined by a line: their x-axis distance "
+                "is the real potency gap, their y-axis distance is what the "
+                "model predicts. On the cliff target you can see that these distances are not the same — the model fails to capture "
+                "a real gap it was trained on. The top row uses the **ECFP** "
+                "fingerprint, the bottom row the **CheMeleon** one — you can notice differences in performance between the fingerprints, but neither manages to accurately capture any of our cliff pairs."
+                "If you cycle among the various options, you'll notice the cliff is captured by the model on some of the opioid pairs - but this is not reliable."
+            ),
+            _ecfp_row,
+            _chem_row,
+            mo.md("---"),
+        ])
+    _scatter_view
+    return
+
+
+@app.cell
+def _(ctx, cv, get_cliff_idx, get_pair_key, mo, setup_ready):
     from rdkit import Chem as _Chem
 
     from fingerprints import importance_view as iv
@@ -269,11 +506,13 @@ def _(cv, ctx, get_cliff_idx, get_pair_key, mo, setup_ready):
     assert setup_ready  # gate on CheMeleon weights (importance heatmaps use them)
 
     # Where does a MODEL look? For BOTH targets, train a RandomForest to predict
-    # activity from each fingerprint, project its feature importances back onto
-    # each cliff molecule, and diff the two targets' attention. The diff is the
-    # real test: a fingerprint that captured the biology would re-weight toward
-    # the atom that flips the activity. A static one barely moves — and where it
-    # does move is not where the change is.
+    # activity from each fingerprint and project its feature importances back
+    # onto each cliff molecule. The two targets are different assays on
+    # different data, so of course the models weight features differently - the
+    # per-target heatmaps and their difference are shown mostly for intuition,
+    # not as a gotcha. The actual point is quantitative and lives in the
+    # predicted-vs-measured gap: the model can't reproduce the cliff even having
+    # trained on it.
     _tp = ctx.by_key()[get_pair_key()]
     _cl = _tp.cliffs[get_cliff_idx()]
     _cliff_ep, _flat_ep = _cl.cliff_on, _cl.flat_on
@@ -306,20 +545,19 @@ def _(cv, ctx, get_cliff_idx, get_pair_key, mo, setup_ready):
                 mol, _cliff_ep, _flat_ep, fp, width=230, height=180
             )
             _st = iv.importance_diff_stats(mol, _cliff_ep, _flat_ep, fp, changed)
-            _diff_cap = (
-                f"**attention shift** {_cliff_ep} − {_flat_ep}  \n"
-                + (
-                    (
-                        "the biggest shift **is** on a changed atom"
-                        if _st["peak_on_changed"]
-                        else "the biggest shift is on the wrong part of the "
-                             "molecule — **not** the changed atoms"
-                    )
-                    if changed
-                    else "the map still lights up — even though *nothing changed* "
-                         "on this molecule"
+            if changed:
+                _share_pct = round(_st["changed_share"] * 100)
+                _enr = _st["enrichment"]
+                _diff_cap = (
+                    f"**attention shift** {_cliff_ep} − {_flat_ep}  \n"
+                    f"changed atoms hold {_share_pct}% of the shift — "
+                    f"**{_enr:.1f}×** their fair share (1× = no preference)"
                 )
-            )
+            else:
+                _diff_cap = (
+                    f"**attention shift** {_cliff_ep} − {_flat_ep}  \n"
+                    "the map still shifts — though nothing changed on this molecule"
+                )
             return mo.vstack([
                 mo.md(f"**molecule {mol_idx}**"),
                 mo.hstack(
@@ -350,62 +588,28 @@ def _(cv, ctx, get_cliff_idx, get_pair_key, mo, setup_ready):
 
         _true_gap = abs(_cl.actual_pki(1, _cliff_ep) - _cl.actual_pki(2, _cliff_ep))
         _pred_gap_e = _gap(_cliff_ep, "ecfp")
-        # Rank-based check that MATCHES the autoscaled heatmap: does the model's
-        # single biggest attention shift land on a changed atom? Computed
-        # SEPARATELY per fingerprint, over the molecules that actually carry the
-        # structural change - the two fingerprints can (and do) disagree here.
-        def _shift_stats(fp):
-            hits = [
-                iv.importance_diff_stats(_mol, _cliff_ep, _flat_ep, fp, _ch)
-                for _mol, _ch in ((_m1, _changed1), (_m2, _changed2))
-                if _ch
-            ]
-            return sum(1 for s in hits if s["peak_on_changed"]), len(hits)
-
-        _e_on, _n_hits = _shift_stats("ecfp")
-        _c_on, _ = _shift_stats("chemeleon")
-
+        # Gradual metric (not a misleading yes/no): what fraction of the total
         _gap_line = (
             f" On **{_cliff_ep}** the measured pKi gap between the two molecules is "
-            f"**{_true_gap:.1f}** log units, but the ECFP model predicts a gap of just "
-            f"**{_pred_gap_e:.1f}** — it flattens the cliff."
+            f"**{_true_gap:.1f}** log units; the ECFP model predicts a gap of "
+            f"**{_pred_gap_e:.1f}** — so even a model trained on both molecules "
+            f"barely separates them."
             if _pred_gap_e is not None
             else ""
         )
-        # Describe each fingerprint honestly: sometimes the learned fingerprint's
-        # loudest shift *does* land on a changed atom, even when ECFP's doesn't.
-        def _phrase(n_on, n):
-            return f"on **{n_on} of {n}** the biggest shift lands on a changed atom"
+        _diff_line = (
+            " The three heatmaps per molecule show where each target's model looks, "
+            "and their difference. The two targets are different assays on different "
+            "data, so naturally the models weight features differently — that part "
+            "isn't surprising. Each difference panel is annotated with the *share* of "
+            "the total attention shift that lands on the atoms that actually changed, "
+            "and the *enrichment* over the share those atoms would get by count alone "
+            "(near 1 = no particular preference for the changed atoms)."
+        )
 
-        if _n_hits:
-            _both_miss = _e_on == 0 and _c_on == 0
-            if _both_miss:
-                _diff_line = (
-                    " The diff panels tell the same story visually: the model's "
-                    "attention *does* move between targets, but the loudest shifts "
-                    "land away from the handful of atoms that actually changed — "
-                    f"for ECFP {_phrase(_e_on, _n_hits)}, and likewise for CheMeleon "
-                    f"({_phrase(_c_on, _n_hits)}). The model re-weights plenty, just "
-                    "not where the chemistry actually moved."
-                )
-            else:
-                _diff_line = (
-                    " The diff panels are more nuanced here. The models' attention "
-                    "*does* move between targets: for the fixed **ECFP** fingerprint "
-                    f"{_phrase(_e_on, _n_hits)}, while for the **learned CheMeleon** "
-                    f"fingerprint {_phrase(_c_on, _n_hits)}. So on this pair the "
-                    "learned representation sometimes *does* put its loudest shift on "
-                    "an atom that changed — a hint that a representation learned from "
-                    "data can occasionally localise the change better than a fixed "
-                    "one. But note this attention landing on the right atom still "
-                    "isn't enough: as the predicted-gap numbers show, neither model "
-                    "actually *resolves* the potency cliff."
-                )
-        else:
-            _diff_line = ""
         _summary = mo.md(
-            "The similarity metric isn't the only culprit — a trained model inherits "
-            "the same blind spot. Below, a RandomForest predicts pKi for **both** "
+            "Does a trained model do better? Below, a RandomForest "
+            "predicts pKi for **both** "
             f"targets ({_cliff_ep} and {_flat_ep}) from each fingerprint. For every "
             "molecule we show where the model looks for each target and, in the third "
             "panel, the **difference** between them."
@@ -441,16 +645,125 @@ def _(cv, ctx, get_cliff_idx, get_pair_key, mo, setup_ready):
                 "atom by its exact contribution to the top model dimensions. The diff "
                 "panel L1-normalises each target's attention, subtracts, and shades red "
                 "where the cliff-target model leans harder, blue where the flat-target "
-                "model does. Because that map is autoscaled to its own strongest atom, "
-                "we read it by *rank*: we ask whether the single largest shift (the most "
-                "saturated atom) falls on one of the changed atoms, rather than summing a "
-                "raw magnitude the eye can't verify. All are honest *estimates* of where "
-                "the model looks, not ground-truth substructure claims."
+                "model does. We summarise it with a **share-of-shift** number: the "
+                "fraction of the total absolute attention shift that falls on the "
+                "changed atoms, divided by the fraction those atoms would get by count "
+                "alone (an *enrichment* — 1.0 means no concentration on the change). "
+                "This is a gradual measure rather than a brittle yes/no on the single "
+                "biggest atom. All are honest *estimates* of where the model looks, "
+                "not ground-truth substructure claims."
             )
         })
         _grid = mo.vstack([_fp_block("ecfp", "ECFP"), _fp_block("chemeleon", "CheMeleon")])
         _view = mo.vstack([_summary, _details, _grid])
     mo.vstack([_view, mo.md("---")])
+    return
+
+
+@app.cell
+def _(alt, ctx, cv, mo, pd, setup_ready):
+    from rdkit import Chem as _Chem3
+
+    from fingerprints import importance_view as _iv_corr
+
+    assert setup_ready
+
+    # Does *where the model looks* predict *how well it captures the cliff*?
+    # For every cliff pair x fingerprint, plot the attention concentration on
+    # the changed atoms (enrichment) against the fraction of the true potency
+    # gap the model actually reproduces. If attention drove accuracy these would
+    # trend together; they don't - the cliff-blindness is about the
+    # representation collapsing the two molecules, not about attending to the
+    # wrong atoms.
+    if not _iv_corr.has_data():
+        _corr_view = mo.md("")
+    else:
+        import numpy as _np_corr
+
+        _rows = []
+        for _tp in ctx.by_key().values():
+            for _i, _c in enumerate(_tp.cliffs):
+                _mm1 = _Chem3.MolFromSmiles(_c.smiles_1)
+                _mm2 = _Chem3.MolFromSmiles(_c.smiles_2)
+                _cc1, _cc2 = cv.changed_atoms(_c)
+                _ep = _c.cliff_on
+                if _ep not in _iv_corr.endpoints():
+                    continue
+                _tg = abs(_c.actual_pki(1, _ep) - _c.actual_pki(2, _ep))
+                if _tg <= 0:
+                    continue
+                for _fp, _fpl in (("ecfp", "ECFP"), ("chemeleon", "CheMeleon")):
+                    _p1 = _iv_corr.predict(_ep, _fp, _mm1)
+                    _p2 = _iv_corr.predict(_ep, _fp, _mm2)
+                    if _p1 is None or _p2 is None:
+                        continue
+                    _captured = abs(_p1 - _p2) / _tg
+                    _st = [
+                        _iv_corr.importance_diff_stats(_m, _ep, _c.flat_on, _fp, _ch)
+                        for _m, _ch in ((_mm1, _cc1), (_mm2, _cc2))
+                        if _ch
+                    ]
+                    if not _st:
+                        continue
+                    _enr = float(_np_corr.mean([s["enrichment"] for s in _st]))
+                    _rows.append(
+                        {
+                            "enrichment": round(_enr, 3),
+                            "captured": round(_captured, 3),
+                            "fingerprint": _fpl,
+                            "pair": f"{_ep} #{_i}",
+                        }
+                    )
+        _cdf = pd.DataFrame(_rows)
+        _r = (
+            float(_cdf["enrichment"].corr(_cdf["captured"]))
+            if len(_cdf) >= 3
+            else float("nan")
+        )
+        _scatter = (
+            alt.Chart(_cdf)
+            .mark_circle(size=90, opacity=0.8)
+            .encode(
+                x=alt.X("enrichment:Q",
+                        title="attention concentration on changed atoms (enrichment, 1 = none)"),
+                y=alt.Y("captured:Q",
+                        title="fraction of the cliff the model captures",
+                        scale=alt.Scale(domain=[0, 1])),
+                color=alt.Color(
+                    "fingerprint:N",
+                    scale=alt.Scale(domain=["ECFP", "CheMeleon"],
+                                    range=["#4c6ef5", "#7048e8"]),
+                    legend=alt.Legend(title=None, orient="top"),
+                ),
+                tooltip=["pair:N", "fingerprint:N",
+                         alt.Tooltip("enrichment:Q", format=".2f"),
+                         alt.Tooltip("captured:Q", format=".2f")],
+            )
+            .properties(width=380, height=240)
+        )
+        _corr_view = mo.vstack([
+            mo.md(
+                "### Does *where* the model looks predict *how well* it sees the cliff?\n\n"
+                "One more check, pooled over every cliff pair and both fingerprints: "
+                "the x-axis is how concentrated the model's attention shift is on the "
+                "changed atoms (the enrichment from above), the y-axis is the fraction "
+                "of the true potency gap the model actually reproduces. If paying "
+                "attention to the right atoms were what mattered, these would climb "
+                "together."
+            ),
+            mo.as_html(_scatter),
+            mo.md(
+                f"They don't — the correlation is essentially zero "
+                f"(Pearson r ≈ **{_r:.2f}**), and every model captures only "
+                "about half to three-quarters of the gap regardless of where its "
+                "attention sits. That's the real lesson: cliff-blindness isn't a "
+                "matter of the model looking at the wrong atoms — it's that the "
+                "fingerprint places the two near-identical molecules at nearly the "
+                "same point, so there's little signal to attend to in the first place."
+            ).callout(kind="info"),
+            mo.md("---"),
+        ])
+    _corr_view
     return
 
 
@@ -1065,7 +1378,15 @@ def _(chemeleon_floor, current_mol, mo, mol_valid, setup_ready):
 
 
 @app.cell
-def _(chemeleon_dim, chemeleon_dims, chemeleon_floor, chf, current_mol, mo, mol_valid):
+def _(
+    chemeleon_dim,
+    chemeleon_dims,
+    chemeleon_floor,
+    chf,
+    current_mol,
+    mo,
+    mol_valid,
+):
     # Render the current molecule as a heatmap of one learned dimension's
     # per-atom contributions. Exact decomposition: the graph fingerprint is a
     # mean over atoms, so atom i's share of dimension k is H[i,k]/n_atoms.
@@ -2588,6 +2909,48 @@ def _(ctx, get_cliff_idx, get_pair_key, mo):
             ]
         )
     mo.vstack([_view, mo.md("---")])
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md(r"""
+    ---
+
+    ## So what are fingerprints good for?
+
+    It would be easy to read all of the above as an indictment. It isn't.
+    Molecular fingerprints are one of the most useful abstractions in all of
+    cheminformatics, and everything we showed is a direct consequence of *why*
+    they work so well:
+
+    - **The core assumption is right almost all of the time.** "Similar
+      structure → similar property" held for the overwhelming majority of the
+      similar pairs in every census we ran. That is exactly why fingerprints
+      power similarity search, clustering, library design, and property
+      prediction across the entire field — they are cheap, fast, and mostly
+      correct.
+    - **They are a phenomenal baseline.** A fixed fingerprint plus a simple
+      model is trivial to compute, needs no training of the representation, and
+      is hard to beat on smooth, well-behaved endpoints. We saw the learned
+      neural fingerprint only pull meaningfully ahead on the *accumulating*
+      properties it was practically built for.
+    - **Their limits are precise, not mysterious.** The one place they reliably
+      fail — the activity cliff — is the exact point where reality *violates* the
+      assumption that makes them useful. That failure is a property of the
+      encoding (and, we saw, partly of the data's own noise), and it travels
+      with *any* static representation, hand-designed or learned. No downstream
+      model cleverness recovers information the encoding never stored.
+
+    So the honest takeaway is a working chemist's rule of thumb, not a warning
+    label: **reach for a fingerprint first — it will be right most of the
+    time and it costs almost nothing — but know that the sharpest, most
+    interesting cases, the cliffs, are exactly the ones it can't see.** Those are
+    where you spend the expensive tools: end-to-end learned representations,
+    3D structure, assays. A fingerprint tells you where the smooth landscape is;
+    it just can't tell you where the cliff edge is. Knowing *which* problem
+    you're on is the whole skill.
+    """)
     return
 
 

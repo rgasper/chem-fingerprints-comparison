@@ -127,14 +127,22 @@ def train_one(X, y, tr_mask, te_mask, seed=0):
     """
     rf = RandomForestRegressor(n_estimators=RF_TREES, n_jobs=-1, random_state=seed)
     rf.fit(X[tr_mask], y[tr_mask])
-    yp = rf.predict(X[te_mask])
+    yp_te = rf.predict(X[te_mask])
+    yp_tr = rf.predict(X[tr_mask])
     stats = {
         "importances": rf.feature_importances_.astype(float).tolist(),
-        "r2": r2(y[te_mask], yp),
-        "rmse": rmse(y[te_mask], yp),
+        "r2": r2(y[te_mask], yp_te),
+        "rmse": rmse(y[te_mask], yp_te),
         "n_train": int(tr_mask.sum()),
         "n_test": int(te_mask.sum()),
         "split": "scaffold",
+        # measured-vs-predicted pKi scatter for BOTH folds so the notebook can
+        # show how good the model is (train + held-out test, distinguished),
+        # rounded to keep the cache small
+        "test_measured": [round(float(v), 3) for v in y[te_mask]],
+        "test_pred": [round(float(v), 3) for v in yp_te],
+        "train_measured": [round(float(v), 3) for v in y[tr_mask]],
+        "train_pred": [round(float(v), 3) for v in yp_tr],
     }
     return rf, stats
 

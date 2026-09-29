@@ -72,6 +72,20 @@ def predict(endpoint: str, fp: str, mol: Chem.Mol) -> float | None:
     return preds.get(Chem.MolToSmiles(mol))
 
 
+def test_scatter(endpoint: str, fp: str) -> tuple[list[float], list[float]]:
+    """Held-out test-fold (measured, predicted) pKi for one endpoint + fp, so
+    the notebook can plot how good the model is. Returns ([], []) if absent."""
+    d = _data()["endpoints"][endpoint][fp]
+    return d.get("test_measured", []), d.get("test_pred", [])
+
+
+def fold_scatter(endpoint: str, fp: str, fold: str) -> tuple[list[float], list[float]]:
+    """(measured, predicted) pKi for one endpoint + fp on the given ``fold``
+    ('train' or 'test'). Returns ([], []) if not present in the cache."""
+    d = _data()["endpoints"][endpoint][fp]
+    return d.get(f"{fold}_measured", []), d.get(f"{fold}_pred", [])
+
+
 # ---- per-atom importance ------------------------------------------------
 def ecfp_on_bits(mol: Chem.Mol) -> list[int]:
     return me.on_bits(mol, n_bits=N_BITS)
@@ -126,36 +140,58 @@ def atom_importance_diff(
 def importance_diff_stats(
     mol: Chem.Mol, ep_a: str, ep_b: str, fp: str, changed: list[int]
 ) -> dict:
-    """Quantify whether the model even *notices* the target swap, and whether
-    the change it makes lands on the atoms that actually cause the cliff.
+    """Quantify whether the model even *notices* the target swap, and how much
+    of the re-weighting actually lands on the atoms that cause the cliff.
 
-    All quantities are RANK-based so they match what the (autoscaled) diff
-    heatmap actually emphasises: the heatmap saturates on the largest-magnitude
-    atoms, so we characterise *where the biggest shifts are*, not the raw total.
+    Rather than a misleading yes/no "is the single biggest mover a changed
+    atom?", we report a **gradual** share-of-attention metric:
+
+      changed_share = sum(|diff| over changed atoms) / sum(|diff| over all atoms)
+
+    i.e. what fraction of the model's total attention *shift* (between the two
+    targets) concentrates on the handful of atoms that structurally changed.
+    We compare it to the **fair share** a spatially-blind model would give those
+    atoms just by their count, ``n_changed / n_atoms``. An ``enrichment`` > 1
+    means the shift is *concentrated* on the change; ~1 means the model
+    re-weights the changed atoms no more than any others; < 1 means it actually
+    leans elsewhere. Also returns a rank check (are the changed atoms among the
+    top movers) for a secondary, discrete read.
 
     Returns:
-      total_shift: sum |diff| of L1-normalised attention (0 => identical,
-        ~2 => disjoint). Kept for reference; NOT foregrounded because it's a
-        global sum the eye can't read off the map.
-      peak_atom: index of the single largest-shift atom (the one the heatmap
-        lights up most strongly).
-      peak_on_changed: True if that peak atom is one of the changed atoms.
-      top_k: how many top movers we consider (== number of changed atoms,
-        so a fair "did the shift concentrate on the change?" test).
-      top_hits: of those top_k biggest-shift atoms, how many are changed atoms.
+      changed_share: fraction of total |shift| on the changed atoms (0..1).
+      fair_share: n_changed / n_atoms (the count-only baseline).
+      enrichment: changed_share / fair_share (1.0 == no concentration).
+      changed_in_top: True if any changed atom is among the top-``top_k`` movers.
+      top_k: neighbourhood size for the rank check (5, capped at n_atoms).
+      top_hits: how many changed atoms are in that top-k.
+      total_shift: sum |diff| (0 => identical, ~2 => disjoint). Reference only.
+      peak_atom / peak_on_changed: kept for backward compat (the single biggest
+        mover); no longer foregrounded in the prose.
+      n_changed: number of changed atoms.
     """
     diff = np.abs(atom_importance_diff(mol, ep_a, ep_b, fp))
-    order = np.argsort(diff)[::-1]
+    n_atoms = int(mol.GetNumAtoms())
     changed_set = set(changed)
-    k = max(len(changed), 1)
-    top = order[:k]
+    total = float(diff.sum()) or 1.0
+    changed_mass = float(diff[list(changed_set)].sum()) if changed_set else 0.0
+    changed_share = changed_mass / total
+    fair = (len(changed_set) / n_atoms) if n_atoms else 0.0
+    enrichment = (changed_share / fair) if fair > 0 else 0.0
+
+    order = np.argsort(diff)[::-1]
+    k = min(5, n_atoms)
+    top = set(int(a) for a in order[:k])
     return {
+        "changed_share": changed_share,
+        "fair_share": fair,
+        "enrichment": enrichment,
+        "changed_in_top": bool(changed_set & top),
+        "top_k": k,
+        "top_hits": int(len(changed_set & top)),
         "total_shift": float(diff.sum()),
         "peak_atom": int(order[0]),
-        "peak_on_changed": bool(order[0] in changed_set),
-        "top_k": k,
-        "top_hits": int(sum(1 for a in top if a in changed_set)),
-        "n_changed": len(changed),
+        "peak_on_changed": bool(int(order[0]) in changed_set),
+        "n_changed": len(changed_set),
     }
 
 
