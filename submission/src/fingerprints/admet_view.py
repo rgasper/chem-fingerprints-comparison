@@ -1,5 +1,5 @@
 """Read the cached ADMET single-endpoint cliff census
-(``scripts/analyze_admet_cliffs.py``) for the notebook's "cliffs aren't
+(``fingerprints.analyses.admet``) for the notebook's "cliffs aren't
 exclusive to protein binding" section.
 
 Activity cliffs are *easiest to see* in the two-target binding case, because a

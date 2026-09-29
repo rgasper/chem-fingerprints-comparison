@@ -26,7 +26,7 @@ therefore the fingerprint's blindness, laid bare, not an artefact of a fancier
 learner.
 
 Run:
-  uv run python scripts/analyze_knn_cliffs.py
+  uv run python -m fingerprints.analyses.knn
 """
 from __future__ import annotations
 

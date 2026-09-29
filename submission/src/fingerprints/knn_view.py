@@ -1,4 +1,4 @@
-"""Read the cached kNN cliff-failure analysis (``scripts/analyze_knn_cliffs.py``)
+"""Read the cached kNN cliff-failure analysis (``fingerprints.analyses.knn``)
 for the notebook's "why a similarity model can't see the cliff" section.
 
 kNN regression on ECFP is the simplest model whose behaviour *is* the

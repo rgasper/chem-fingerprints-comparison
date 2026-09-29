@@ -132,7 +132,7 @@ def plif_similarity(pair_key: str, index: int, target: str) -> float | None:
 
     Returns ``None`` when this cliff has no cached poses (so the caller can just
     omit the bar rather than fabricate a number). Requires the four Boltz poses
-    produced offline by ``scripts/boltz_fold_cliffs.py``.
+    produced offline by ``fingerprints.rebuild_poses``.
     """
     try:
         from fingerprints import pose_view as pv

@@ -8,9 +8,8 @@ model (or fingerprint) that only sees structure cannot know that the same
 one-atom change matters enormously for one target and not at all for another.
 
 These pairs were mined from the MoleculeACE benchmark (van Tilborg et al. 2022)
-by ``scripts/precompute_context_cliffs.py`` - an all-pairs MCS search over the
-molecules shared between two related targets - then **hand-selected** here for
-chemical legibility. Each pair:
+by an offline all-pairs MCS search over the molecules shared between two related
+targets - then **hand-selected** here for chemical legibility. Each pair:
 
   * differs by a small, real, medicinal-chemistry change (a bioisostere, a
     halogen, one ring atom) - never a tautomer, salt, or stereochemistry-only
@@ -201,3 +200,19 @@ def clamp_cliff_idx(pair_key: str, idx: int) -> int:
     if n == 0:
         return 0
     return max(0, min(idx, n - 1))
+
+
+def cliff_molecule_options(pair_key: str, idx: int) -> dict[str, str]:
+    """Menu of the two molecules in one cliff: display label -> SMILES.
+
+    Lets the "what does a fingerprint encode" section reuse the *same* two
+    molecules the reader is already studying in the cliff, instead of an
+    unrelated gallery. Labels spell out that these are the exact cliff pair.
+    """
+    tp = by_key()[pair_key]
+    idx = clamp_cliff_idx(pair_key, idx)
+    c = tp.cliffs[idx]
+    return {
+        f"Molecule 1 — before ({c.change})": c.smiles_1,
+        f"Molecule 2 — after ({c.change})": c.smiles_2,
+    }

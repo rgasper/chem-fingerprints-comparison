@@ -16,7 +16,7 @@ Chemistry hygiene (so a working chemist trusts it):
     never straddle the split (the leakage the rubric warns about).
 
 Run:
-  uv run python scripts/analyze_admet_cliffs.py
+  uv run python -m fingerprints.analyses.admet
 """
 from __future__ import annotations
 

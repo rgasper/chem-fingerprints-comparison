@@ -26,7 +26,7 @@ def _(mo):
     prediction for example are frequently based partially or entirely off of fingerprints as input.
     This notebook takes fingerprints apart to see what they encode and where that encoding commonly fails.
 
-    To begin, we'll highlight one of the well-known failings of molecular fingerprints: activity cliffs. We'll spend most of the rest of the notebook trying to build an intuitive understand for how fingerprints are related to activity cliffs, and also how they're not!
+    To begin, we'll highlight one of the well-known failings of molecular fingerprints: activity cliffs. We'll spend most of the rest of the notebook trying to build an intuitive understanding for how fingerprints are related to activity cliffs, and also how they're not!
 
     *AI was used in the creation of this notebook. For the full disclaimer, head to the very bottom*
     """)
@@ -132,7 +132,7 @@ def _(boltz_api_key, mo, recompute_toggle):
 @app.cell
 def _(mo):
     mo.md(r"""
-    Here are two real molecules that differ by the only a few atoms - we've got a few options you can choose from, to help demonstrate that this is not a phenomenon specific to this exact choice of chemicals. Whichever case you pick, the two molecules are nearly identical in structure, and nearly - sometimes exactly - identical in fingerprint. And yet their measured potency against closely related enzymes differs by orders of magnitude — this is an *activity cliff*.
+    Here are two real molecules that differ by only a few atoms - we've got a few options you can choose from, to help demonstrate that this is not a phenomenon specific to this exact choice of chemicals. Whichever case you pick, the two molecules are nearly identical in structure, and nearly - sometimes exactly - identical in fingerprint. And yet their measured potency against closely related enzymes differs by orders of magnitude — this is an *activity cliff*.
 
     Pick a target pair and a molecule pair below. These are
     two intentionally chosen, closely related, targets from the MoleculeACE dataset
@@ -282,7 +282,7 @@ def _(cv, ctx, get_cliff_idx, get_pair_key, mo, setup_ready):
     if not _have:
         _view = mo.md(
             "*Feature-importance models weren't precomputed for this pair yet. "
-            "(Run `scripts/train_importance.py` to add it.)*"
+            "(Run `python -m fingerprints.analyses.importance` to add it.)*"
         ).callout(kind="info")
     else:
         _m1 = _Chem.MolFromSmiles(_cl.smiles_1)
@@ -351,16 +351,19 @@ def _(cv, ctx, get_cliff_idx, get_pair_key, mo, setup_ready):
         _true_gap = abs(_cl.actual_pki(1, _cliff_ep) - _cl.actual_pki(2, _cliff_ep))
         _pred_gap_e = _gap(_cliff_ep, "ecfp")
         # Rank-based check that MATCHES the autoscaled heatmap: does the model's
-        # single biggest attention shift land on a changed atom? Aggregated over
-        # the molecules that actually carry the structural change.
-        _shift_hits = []
-        for _mol, _ch in ((_m1, _changed1), (_m2, _changed2)):
-            if _ch:
-                _shift_hits.append(
-                    iv.importance_diff_stats(_mol, _cliff_ep, _flat_ep, "ecfp", _ch)
-                )
-        _n_hits = len(_shift_hits)
-        _peaks_on_changed = sum(1 for s in _shift_hits if s["peak_on_changed"])
+        # single biggest attention shift land on a changed atom? Computed
+        # SEPARATELY per fingerprint, over the molecules that actually carry the
+        # structural change - the two fingerprints can (and do) disagree here.
+        def _shift_stats(fp):
+            hits = [
+                iv.importance_diff_stats(_mol, _cliff_ep, _flat_ep, fp, _ch)
+                for _mol, _ch in ((_m1, _changed1), (_m2, _changed2))
+                if _ch
+            ]
+            return sum(1 for s in hits if s["peak_on_changed"]), len(hits)
+
+        _e_on, _n_hits = _shift_stats("ecfp")
+        _c_on, _ = _shift_stats("chemeleon")
 
         _gap_line = (
             f" On **{_cliff_ep}** the measured pKi gap between the two molecules is "
@@ -369,16 +372,37 @@ def _(cv, ctx, get_cliff_idx, get_pair_key, mo, setup_ready):
             if _pred_gap_e is not None
             else ""
         )
-        _diff_line = (
-            " The diff panels tell the same story visually: the model's attention "
-            "*does* move between targets, but the loudest shifts land away from the "
-            "handful of atoms that actually changed. On "
-            f"**{_peaks_on_changed} of {_n_hits}** of the changed molecules here does "
-            "the single biggest shift even land on a changed atom — the model "
-            "re-weights plenty, just not where the chemistry actually moved."
-            if _n_hits
-            else ""
-        )
+        # Describe each fingerprint honestly: sometimes the learned fingerprint's
+        # loudest shift *does* land on a changed atom, even when ECFP's doesn't.
+        def _phrase(n_on, n):
+            return f"on **{n_on} of {n}** the biggest shift lands on a changed atom"
+
+        if _n_hits:
+            _both_miss = _e_on == 0 and _c_on == 0
+            if _both_miss:
+                _diff_line = (
+                    " The diff panels tell the same story visually: the model's "
+                    "attention *does* move between targets, but the loudest shifts "
+                    "land away from the handful of atoms that actually changed — "
+                    f"for ECFP {_phrase(_e_on, _n_hits)}, and likewise for CheMeleon "
+                    f"({_phrase(_c_on, _n_hits)}). The model re-weights plenty, just "
+                    "not where the chemistry actually moved."
+                )
+            else:
+                _diff_line = (
+                    " The diff panels are more nuanced here. The models' attention "
+                    "*does* move between targets: for the fixed **ECFP** fingerprint "
+                    f"{_phrase(_e_on, _n_hits)}, while for the **learned CheMeleon** "
+                    f"fingerprint {_phrase(_c_on, _n_hits)}. So on this pair the "
+                    "learned representation sometimes *does* put its loudest shift on "
+                    "an atom that changed — a hint that a representation learned from "
+                    "data can occasionally localise the change better than a fixed "
+                    "one. But note this attention landing on the right atom still "
+                    "isn't enough: as the predicted-gap numbers show, neither model "
+                    "actually *resolves* the potency cliff."
+                )
+        else:
+            _diff_line = ""
         _summary = mo.md(
             "The similarity metric isn't the only culprit — a trained model inherits "
             "the same blind spot. Below, a RandomForest predicts pKi for **both** "
@@ -398,7 +422,12 @@ def _(cv, ctx, get_cliff_idx, get_pair_key, mo, setup_ready):
                 "trained independently for each endpoint and each fingerprint.\n\n"
                 "**Fingerprints.** ECFP (Morgan, radius 2, "
                 f"{iv.config()['n_bits']} bits) and the frozen CheMeleon embedding.\n\n"
-                "**Split.** 80/20 random train/test.\n\n"
+                "**Split.** 80/20 **Bemis–Murcko scaffold split** (whole scaffold "
+                "groups go to one side only), so the reported R²/RMSE are measured on "
+                "held-out chemotypes with no near-duplicate leakage. Note the curated "
+                "cliff molecules shown above may fall in either fold — they're used "
+                "only to *visualise* where the trained model looks, not as a "
+                "leakage-free benchmark.\n\n"
                 f"**{_cliff_ep} (cliff).** "
                 f"ECFP: {_mt_ec['n_train']:,} train / {_mt_ec['n_test']:,} test, "
                 f"R² {_mt_ec['r2']:.2f}, RMSE {_mt_ec['rmse']:.2f}. "
@@ -444,19 +473,23 @@ def _(mo):
 
     These two fingerprint types differ in construction significantly, but share one important aspect - they're static. They can't reactively change to new contexts in chemical or target variable space.
 
-    Pick or type any molecule and scrub through bits/dimensions to see what parts of the molecule each fingerprint encodes.
+    Below we look at exactly what the fingerprints encode for the **two molecules from the cliff you're examining** — the same near-identical pair from above. Pick either molecule (or type your own SMILES), then scrub through bits/dimensions to see what parts of the molecule each fingerprint records. Because the two cliff molecules differ by only a handful of atoms, watching how little the fingerprint changes between them is the whole point.
     """)
     return
 
 
 @app.cell
-def _(mo):
-    from fingerprints import gallery as gal
-
+def _(ctx, get_cliff_idx, get_pair_key, mo, selectors):
+    # Reuse the SAME two molecules from the cliff the reader picked above,
+    # instead of an unrelated gallery — it keeps this section tied to the
+    # story. The menu is rebuilt reactively from the current (pair, cliff)
+    # selection; a synced copy of the selectors is shown here so the reader
+    # can switch cliffs without scrolling back up.
+    _mol_opts = ctx.cliff_molecule_options(get_pair_key(), get_cliff_idx())
     mol_choice = mo.ui.dropdown(
-        options=[g.label for g in gal.GALLERY],
-        value=gal.default_label(),
-        label="Choose a molecule",
+        options=_mol_opts,
+        value=next(iter(_mol_opts)),
+        label="Molecule from this cliff",
     )
     custom_smiles = mo.ui.text(
         value="",
@@ -464,26 +497,39 @@ def _(mo):
         full_width=True,
         placeholder="e.g. CC(=O)Oc1ccccc1C(=O)O",
     )
-    return custom_smiles, gal, mol_choice
+    _picker = mo.vstack(
+        [
+            mo.md("**Switch the cliff pair (synced with the sections above):**"),
+            selectors(),
+        ]
+    )
+    _picker
+    return custom_smiles, mol_choice
 
 
 @app.cell
-def _(custom_smiles, gal, mo, mol_choice):
+def _(custom_smiles, mo, mol_choice):
     from fingerprints import maccs_explorer as mx
 
     # Resolve the single upstream molecule: custom SMILES wins if provided,
-    # otherwise fall back to the gallery pick. Everything downstream depends
-    # only on `current_mol` / `current_label`.
+    # otherwise use the molecule picked from the current cliff pair. The
+    # dropdown's VALUE is already the molecule's SMILES (see
+    # ctx.cliff_molecule_options), so everything downstream depends only on
+    # `current_mol` / `current_label`.
     _typed = custom_smiles.value.strip()
     if _typed:
         _mol = mx.mol_from_smiles(_typed)
         _source_label = "custom SMILES"
         _picked_note = ""
     else:
-        _entry = gal.by_label()[mol_choice.value]
-        _mol = mx.mol_from_smiles(_entry.smiles)
-        _source_label = _entry.label
-        _picked_note = _entry.note
+        _smiles = mol_choice.value
+        _mol = mx.mol_from_smiles(_smiles)
+        # the dropdown key (e.g. "Molecule 1 — before (…)") is the nice label
+        _source_label = next(
+            (k for k, v in mol_choice.options.items() if v == _smiles),
+            "cliff molecule",
+        )
+        _picked_note = "one of the two molecules from the cliff above"
 
     current_mol = _mol
     mol_valid = current_mol is not None
@@ -838,7 +884,7 @@ def _(alt, current_mol, me, mo, mol_valid, pd):
                 mo.as_html(_chart),
                 mo.md(
                     f"This molecule has {_distinct} distinct atom environments. "
-                    "The has collision rate falls off fast — which is why **2048 bits** is a common "
+                    "The collision rate falls off fast — which is why **2048 bits** is a common "
                     "default: long enough that collisions are rare, short enough to "
                     "stay cheap."
                 ),
@@ -970,7 +1016,7 @@ def _(mo):
     dimension is a continuous feature with a complex relationship to the input molecule. Below we show one way of visualizing what it's doing: pick a dimension and see which atoms drive that dimension for the currently selected molecule. In contrast to the "classical" fingerprints, we have to use shading instead of clear attribution, and you'll see that some of the most sensitive dimensions encode multiple seemingly unrelated parts of the molecule at once.
 
     In this case, we're using the last embedding dimension before the MLP decision head that was used when CheMeleon was
-    pre-trained to predict thousands of phsyico-chemical features on millions of random drug-like molecules. If you practiced the usual approach to fine-tune the model on your particular dataset, this analysis would produce different results on identical molecules, since the model had to learn a new mapping of molecular structure to data.
+    pre-trained to predict thousands of physico-chemical features on millions of random drug-like molecules. If you practiced the usual approach to fine-tune the model on your particular dataset, this analysis would produce different results on identical molecules, since the model had to learn a new mapping of molecular structure to data.
     """)
     return
 
@@ -1168,7 +1214,7 @@ def _(adm, admet_choice, alt, mo, pd):
     if not adm.has_data() or admet_choice.value not in adm.endpoints():
         admet_census_view = mo.md(
             "*ADMET census not precomputed — run "
-            "`scripts/analyze_admet_cliffs.py`.*"
+            "`python -m fingerprints.analyses.admet`.*"
         ).callout(kind="info")
     else:
         _ep = admet_choice.value
@@ -1356,14 +1402,14 @@ def _(adm, alt, mo, pd):
                     "2. **No fingerprint is safest everywhere.** On solubility "
                     "**atom-pair** often flags fewer cliffs than Morgan or MACCS "
                     "— its distance-based similarity happens to align with what "
-                    "drives solubility — but that lead can dissapear on other "
+                    "drives solubility — but that lead can disappear on other "
                     "endpoints. You could only *learn* which encoding suits an "
                     "endpoint by measuring it first.\n\n"
                     "3. **Activity cliffs are partially a symptom of less standardized data** OpenADMET's "
                     "ExpansionRx LogD and solubility show a *lower* cliff rate "
                     "than the aggregated public AqSolDB — consistent with a "
                     "single-platform, controlled-condition measurement (less "
-                    "inter-lab variation in measurments). The presence of cliffs is a "
+                    "inter-lab variation in measurements). The presence of cliffs is a "
                     "property of the data as well as the chemistry. The problem is that until you have a "
                     "more tightly standardized dataset to compare, you may not know that you're currently working with the noisier one. A model trained on data from another lab may not play well with data from your lab.\n\n"
                 ).callout(kind="info"),
@@ -1525,9 +1571,9 @@ def _(alt, ctx, get_cliff_idx, get_pair_key, mo, pd, resample_flat):
             f"So 'similar structure → similar activity' is *right the vast majority "
             f"of the time*. Any model that predicts from structure alone is "
             f"rewarded for learning it — and a model that instead predicted big "
-            f"activity jumps for near-identical structures would be wrong on the flat"
+            f"activity jumps for near-identical structures would be wrong on the flat "
             f"{_flat_pct}% to catch the cliffy {_cliff_pct:.1f}%. "
-            "This results in an unresolvable tension between specific and global accuracy for whatever fingerprint-based model we pick. **A cliff is where reality"
+            "This results in an unresolvable tension between specific and global accuracy for whatever fingerprint-based model we pick. **A cliff is where reality "
             f"breaks the very assumption that makes the fingerprint useful.** No "
             f"amount of model cleverness recovers information the structure encoding "
             f"never contained — which is why activity cliffs are a well-documented "
@@ -1621,7 +1667,7 @@ def _(alt, ctx, get_cliff_idx, get_pair_key, k_slider, knn, mo, pd):
         _view = mo.md(
             "*The kNN cliff analysis wasn't precomputed for this pair yet — "
             "pick another pair above. "
-            "(Run `scripts/analyze_knn_cliffs.py` to add it.)*"
+            "(Run `python -m fingerprints.analyses.knn` to add it.)*"
         ).callout(kind="info")
     else:
         _ep = _pair["cliff_on"]
@@ -1803,18 +1849,38 @@ def _(alt, ctx, get_cliff_idx, get_pair_key, k_slider, knn, mo, pd):
             width=280, height=230
         )
 
-        # Honest, per-pair statement: the *largest* gap kNN opens across ANY k.
-        _max_gap = max(
-            abs(a["pred"] - b["pred"])
+        # Honest, per-pair statement: the gap kNN opens at each k. At tiny k it
+        # can occasionally match (or exceed) the true gap by copying a single
+        # near-identical neighbour, but that collapses as soon as the
+        # neighbourhood grows; at the accuracy-optimal k the gap is small.
+        _gaps_by_k = {
+            a["k"]: abs(a["pred"] - b["pred"])
             for a, b in zip(_m1["pred_by_k"], _m2["pred_by_k"])
-        )
+        }
+        _max_gap = max(_gaps_by_k.values())
+        _argmax_k = max(_gaps_by_k, key=_gaps_by_k.get)
+        _gap_at_best = _gaps_by_k.get(_best["k"], _max_gap)
+        # Does any k actually resolve the cliff (reach most of the true gap)?
+        _resolves = _max_gap >= 0.8 * _true_gap
+        if _resolves:
+            _range_clause = (
+                f"the widest gap it ever opens is **{_max_gap:.2f}** — but only at "
+                f"**k={_argmax_k}**, where the prediction is just *copying a single "
+                f"near-identical neighbour*; the moment the neighbourhood grows the "
+                f"gap collapses (down to **{_gap_at_best:.2f}** at the accuracy-optimal "
+                f"**k={_best['k']}**)"
+            )
+        else:
+            _range_clause = (
+                f"the widest gap it ever opens for this pair is only "
+                f"**{_max_gap:.2f}** — no neighbourhood size comes close to the true "
+                f"**{_true_gap:.2f}**"
+            )
         _verdict = mo.md(
             f"At **k={_k}**, kNN predicts these two molecules **{_p1:.2f}** and "
             f"**{_p2:.2f}** — a gap of just **{_pred_gap:.2f}**, though the real gap "
             f"is **{_true_gap:.2f}**. "
-            f"**Slide k across its whole range:** the widest gap it ever opens for "
-            f"this pair is only **{_max_gap:.2f}** — no neighbourhood size, not even "
-            f"k=1, comes close to the true **{_true_gap:.2f}**. Meanwhile global "
+            f"**Slide k across its whole range:** {_range_clause}. Meanwhile global "
             f"accuracy peaks near **k={_best['k']}** (R² {_best['r2']:.2f}); the k "
             f"that fits the dataset best still can't see this cliff."
         ).callout(kind="warn")
@@ -2274,7 +2340,7 @@ def _(mo):
     mo.md(r"""
     ### Leave fingerprints behind and look in the pocket
 
-    If the signal isn't in *any* 2D-structure fingerprint, we need to try computation that's more information-rich, but harder to pul off. In this case, what we're going to look at is the **3D interactions** between molecule and protein in the binding pocket, not the
+    If the signal isn't in *any* 2D-structure fingerprint, we need to try computation that's more information-rich, but harder to pull off. In this case, what we're going to look at is the **3D interactions** between molecule and protein in the binding pocket, not the
     2D graph. Below, we fold each ligand into the pocket with **Boltz**, detect
     its contacts with **PLIP**, and read an interaction fingerprint off the
     pose.
@@ -2317,7 +2383,7 @@ def _(ctx, cv, get_cliff_idx, get_pair_key, mo):
             f"*No precomputed 3D poses for this cliff yet ({_tp.target_a} vs "
             f"{_tp.target_b}, pair {_idx + 1}). Poses were folded offline with "
             "Boltz-2 for a subset of cliffs — pick one of those, or run "
-            "`scripts/boltz_fold_cliffs.py` to add this one.*"
+            "`python -m fingerprints.rebuild_poses` to add this one.*"
         ).callout(kind="info")
     else:
         _poses = pv.load_all(_pair_key, _idx)

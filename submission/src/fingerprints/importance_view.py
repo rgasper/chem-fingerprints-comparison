@@ -2,8 +2,9 @@
 a RandomForest leans on to predict D3/D4 activity, projected back onto the
 molecule and onto the fingerprint strip.
 
-Importances are precomputed offline (``scripts/train_importance.py``) and cached;
-this module just maps them onto a given molecule so the notebook stays instant.
+Importances are precomputed offline (``fingerprints.analyses.importance``) and
+cached; this module just maps them onto a given molecule so the notebook stays
+instant.
 
 Two fingerprints:
   * ECFP (Morgan) - bit -> atom environments is exact (RDKit bit info map), so a

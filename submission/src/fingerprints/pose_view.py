@@ -1,6 +1,6 @@
 """Load cached Boltz-2 poses for the activity-cliff section.
 
-The offline ``scripts/boltz_fold_cliffs.py`` co-folded a cliff pair's two ligands
+The offline ``fingerprints.rebuild_poses`` co-folded a cliff pair's two ligands
 into both receptors and cached the predicted complexes (ModelCIF) plus metadata
 under ``data/boltz_poses/``. This module reads those cached files so the notebook
 can render them instantly - it never calls Boltz.
@@ -78,7 +78,7 @@ def load_all(pair: str = "mu_vs_kappa", index: int = 2) -> dict[str, Pose]:
 def load_interactions(pose: Pose) -> list[dict]:
     """PLIP interaction records for a pose (empty list if not yet computed).
 
-    Written by ``scripts/detect_interactions.py`` next to each pose's CIF.
+    Written by ``fingerprints.rebuild_poses`` next to each pose's CIF.
     """
     path = POSE_DIR / f"{pose.tag}.interactions.json"
     if not path.exists():

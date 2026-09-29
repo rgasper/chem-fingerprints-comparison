@@ -10,7 +10,7 @@ Fingerprints are frozen inputs; only a small RF is trained. CheMeleon featurizin
 is the only heavy step, so we cache everything here and the notebook stays instant.
 
 Run:
-  uv run python scripts/train_importance.py
+  uv run python -m fingerprints.analyses.importance
 """
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from loguru import logger
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdFingerprintGenerator as fpg
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
 
 from fingerprints import chemeleon_fp as chf
 
@@ -92,17 +91,50 @@ def r2(yt, yp):
     return 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
 
 
-def train_one(X, y, seed=0):
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=seed)
+def scaffold_split(smiles, test_frac=0.2):
+    """Bemis-Murcko scaffold split: whole scaffold groups go to one side only,
+    so near-duplicate structures never straddle train/test (no leakage). Same
+    deterministic policy as ``analyses.admet.scaffold_split`` - smallest
+    scaffold groups go to test, keeping big common scaffolds in train and
+    testing on rarer chemotypes."""
+    from rdkit.Chem.Scaffolds import MurckoScaffold
+
+    groups: dict[str, list[int]] = {}
+    for i, s in enumerate(smiles):
+        mol = Chem.MolFromSmiles(s)
+        try:
+            scaf = MurckoScaffold.MurckoScaffoldSmiles(mol=mol)
+        except Exception:
+            scaf = ""
+        groups.setdefault(scaf or f"__none_{i}", []).append(i)
+    n = len(smiles)
+    n_test_target = int(round(n * test_frac))
+    is_test = np.zeros(n, dtype=bool)
+    for grp in sorted(groups.values(), key=len):
+        if is_test.sum() >= n_test_target:
+            break
+        for i in grp:
+            is_test[i] = True
+    return ~is_test, is_test
+
+
+def train_one(X, y, tr_mask, te_mask, seed=0):
+    """Fit the RF on the scaffold-split TRAIN fold and report held-out metrics.
+
+    The feature importances are read off the model fit on the train fold; the
+    R2/RMSE are measured on the scaffold-held-out test fold, so no
+    near-duplicate structure straddles the split.
+    """
     rf = RandomForestRegressor(n_estimators=RF_TREES, n_jobs=-1, random_state=seed)
-    rf.fit(Xtr, ytr)
-    yp = rf.predict(Xte)
+    rf.fit(X[tr_mask], y[tr_mask])
+    yp = rf.predict(X[te_mask])
     stats = {
         "importances": rf.feature_importances_.astype(float).tolist(),
-        "r2": r2(yte, yp),
-        "rmse": rmse(yte, yp),
-        "n_train": len(ytr),
-        "n_test": len(yte),
+        "r2": r2(y[te_mask], yp),
+        "rmse": rmse(y[te_mask], yp),
+        "n_train": int(tr_mask.sum()),
+        "n_test": int(te_mask.sum()),
+        "split": "scaffold",
     }
     return rf, stats
 
@@ -135,9 +167,11 @@ def main(out_dir=None, on_step=None):
         Xe = ecfp_matrix(smiles)
         logger.info("  building CheMeleon matrix (forward passes)")
         Xc = chemeleon_matrix(smiles)
+        logger.info("  scaffold-splitting")
+        tr_mask, te_mask = scaffold_split(smiles, test_frac=0.2)
         logger.info("  training RFs")
-        rf_e, ecfp = train_one(Xe, y)
-        rf_c, chem = train_one(Xc, y)
+        rf_e, ecfp = train_one(Xe, y, tr_mask, te_mask)
+        rf_c, chem = train_one(Xc, y, tr_mask, te_mask)
         ecfp["predictions"] = _predict_curated(rf_e, label, "ecfp")
         chem["predictions"] = _predict_curated(rf_c, label, "chemeleon")
         logger.info(

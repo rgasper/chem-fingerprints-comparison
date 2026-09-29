@@ -13,8 +13,8 @@ labels them as such.
 
 Usage:
     export BOLTZ_API_KEY=...   # or put it in .env
-    uv run python scripts/boltz_fold_cliffs.py            # default pair
-    uv run python scripts/boltz_fold_cliffs.py --pair mu_vs_kappa --index 2
+    uv run python -m fingerprints.rebuild_poses            # default pair
+    uv run python -m fingerprints.rebuild_poses --pair mu_vs_kappa --index 2
 """
 
 from __future__ import annotations
