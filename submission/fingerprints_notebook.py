@@ -2399,27 +2399,6 @@ def _(alt, mo, pd, setup_ready):
 
 
 @app.cell
-def _(mo):
-    mo.md(r"""
-    ### Follow-up: does *counting* help every fingerprint — and every property?
-
-    The headline used Morgan. But binary-vs-count is a knob on **every** classical
-    RDKit fingerprint, so let's turn it on all of them at once — and, crucially,
-    on a **third kind of target**. So far every property has been ADMET-flavoured
-    (accumulating). Binding potency is different: it's molecular **recognition**
-    — does the molecule present the right shape to the pocket? — where the *count*
-    of a feature should matter far less than its *presence*.
-
-    The grid below is the same fair linear model (RidgeCV, scaffold split) run for
-    **four fingerprints × {binary, count} × three targets**: our pure accumulator
-    (heavy-atom count), aqueous solubility, and **Dopamine D3 binding pKi**
-    (MoleculeACE / ChEMBL). Watch where switching to counts helps — and where it
-    quietly backfires.
-    """)
-    return
-
-
-@app.cell
 def _(alt, mo, pd, setup_ready):
     from fingerprints import accumulation as acc2
 
@@ -2504,7 +2483,7 @@ def _(alt, mo, pd, setup_ready):
         f"universally best fingerprint - only the right one for the given task, and you can't usually know which it is in advance."
     ).callout(kind="info")
 
-    mo.vstack(
+    count_survey_view = mo.vstack(
         [
             mo.md(
                 f"**binary vs count, every classical fingerprint, three targets** "
@@ -2516,6 +2495,40 @@ def _(alt, mo, pd, setup_ready):
             ),
             mo.as_html(_bars),
             _verdict,
+        ]
+    )
+    return (count_survey_view,)
+
+
+@app.cell
+def _(count_survey_view, mo):
+    mo.vstack(
+        [
+            mo.accordion(
+                {
+                    "🔬 Follow-up: does *counting* help every fingerprint — and every property?": mo.vstack(
+                        [
+                            mo.md(
+                                "The headline used Morgan. But binary-vs-count is a knob on "
+                                "**every** classical RDKit fingerprint, so let's turn it on all "
+                                "of them at once — and, crucially, on a **third kind of target**. "
+                                "So far every property has been ADMET-flavoured (accumulating). "
+                                "Binding potency is different: it's molecular **recognition** — "
+                                "does the molecule present the right shape to the pocket? — where "
+                                "the *count* of a feature should matter far less than its "
+                                "*presence*.\n\n"
+                                "The grid below is the same fair linear model (RidgeCV, scaffold "
+                                "split) run for **four fingerprints × {binary, count} × three "
+                                "targets**: our pure accumulator (heavy-atom count), aqueous "
+                                "solubility, and **Dopamine D3 binding pKi** (MoleculeACE / "
+                                "ChEMBL). Watch where switching to counts helps — and where it "
+                                "quietly backfires."
+                            ),
+                            count_survey_view,
+                        ]
+                    )
+                }
+            ),
             mo.md("---"),
         ]
     )
