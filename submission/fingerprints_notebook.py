@@ -484,10 +484,14 @@ def _(alt, ctx, get_cliff_idx, get_pair_key, mo, pd, setup_ready):
                 "<span style='color:#e8590c'>orange diamonds</span> are the cliff "
                 "pair you selected, joined by a line: their x-axis distance "
                 "is the real potency gap, their y-axis distance is what the "
-                "model predicts. On the cliff target you can see that these distances are not the same — the model fails to capture "
-                "a real gap it was trained on. The top row uses the **ECFP** "
-                "fingerprint, the bottom row the **CheMeleon** one — you can notice differences in performance between the fingerprints, but neither manages to accurately capture any of our cliff pairs."
-                "If you cycle among the various options, you'll notice the cliff is captured by the model on some of the opioid pairs - but this is not reliable."
+                "model predicts. On the cliff target you'll see the orange line "
+                "tilt away from the diagonal: the predicted gap is real but "
+                "**shrunken** — the model moves the two molecules apart, just not "
+                "far enough. The top row uses the **ECFP** fingerprint, the bottom "
+                "row the **CheMeleon** one; cycle through the pairs and you'll find "
+                "the two fingerprints trade small wins, but the same partial-collapse "
+                "shows up on every cliff. Below we look at how partial, and at what "
+                "drives it."
             ),
             _ecfp_row,
             _chem_row,
@@ -588,13 +592,16 @@ def _(ctx, cv, get_cliff_idx, get_pair_key, mo, setup_ready):
 
         _true_gap = abs(_cl.actual_pki(1, _cliff_ep) - _cl.actual_pki(2, _cliff_ep))
         _pred_gap_e = _gap(_cliff_ep, "ecfp")
-        # Gradual metric (not a misleading yes/no): what fraction of the total
+        _frac_e = (
+            _pred_gap_e / _true_gap if (_pred_gap_e is not None and _true_gap) else None
+        )
         _gap_line = (
             f" On **{_cliff_ep}** the measured pKi gap between the two molecules is "
-            f"**{_true_gap:.1f}** log units; the ECFP model predicts a gap of "
-            f"**{_pred_gap_e:.1f}** — so even a model trained on both molecules "
-            f"barely separates them."
-            if _pred_gap_e is not None
+            f"**{_true_gap:.1f}** log units; the ECFP model predicts "
+            f"**{_pred_gap_e:.1f}** — about **{_frac_e:.0%}** of the real gap. So it "
+            f"moves them apart in the right direction, but stops well short even "
+            f"though it trained on both."
+            if _frac_e is not None
             else ""
         )
         _diff_line = (
@@ -671,10 +678,12 @@ def _(alt, ctx, cv, mo, pd, setup_ready):
     # Does *where the model looks* predict *how well it captures the cliff*?
     # For every cliff pair x fingerprint, plot the attention concentration on
     # the changed atoms (enrichment) against the fraction of the true potency
-    # gap the model actually reproduces. If attention drove accuracy these would
-    # trend together; they don't - the cliff-blindness is about the
-    # representation collapsing the two molecules, not about attending to the
-    # wrong atoms.
+    # gap the model reproduces. The capture fraction is strikingly stable
+    # (~half to three-quarters) across unrelated targets while enrichment swings
+    # 100x with r~0 between them: attending to the right atoms isn't the
+    # bottleneck. The model shrinks the gap toward the training mean by a
+    # roughly constant amount regardless of where it looks - location of the
+    # change tells it nothing about the magnitude of the effect.
     if not _iv_corr.has_data():
         _corr_view = mo.md("")
     else:
@@ -720,6 +729,7 @@ def _(alt, ctx, cv, mo, pd, setup_ready):
             if len(_cdf) >= 3
             else float("nan")
         )
+        _mean_cap = float(_cdf["captured"].mean()) if len(_cdf) else float("nan")
         _scatter = (
             alt.Chart(_cdf)
             .mark_circle(size=90, opacity=0.8)
@@ -744,22 +754,35 @@ def _(alt, ctx, cv, mo, pd, setup_ready):
         _corr_view = mo.vstack([
             mo.md(
                 "### Does *where* the model looks predict *how well* it sees the cliff?\n\n"
-                "One more check, pooled over every cliff pair and both fingerprints: "
-                "the x-axis is how concentrated the model's attention shift is on the "
-                "changed atoms (the enrichment from above), the y-axis is the fraction "
-                "of the true potency gap the model actually reproduces. If paying "
-                "attention to the right atoms were what mattered, these would climb "
-                "together."
+                "Notice something in the panels above: the models never miss the cliff "
+                "completely, but they never fully land it either — the predicted gap is "
+                "consistently a fraction of the real one. So two questions. Is that "
+                "fraction actually stable across very different targets? And does it "
+                "track *where* the model focused — do the models that concentrate on "
+                "the atoms that changed capture more of the gap?\n\n"
+                "Pooled over every cliff pair and both fingerprints below: the x-axis "
+                "is how concentrated each model's attention shift is on the changed "
+                "atoms (the enrichment from above, 1 = no preference), the y-axis is "
+                "the fraction of the true potency gap it reproduces."
             ),
             mo.as_html(_scatter),
             mo.md(
-                f"They don't — the correlation is essentially zero "
-                f"(Pearson r ≈ **{_r:.2f}**), and every model captures only "
-                "about half to three-quarters of the gap regardless of where its "
-                "attention sits. That's the real lesson: cliff-blindness isn't a "
-                "matter of the model looking at the wrong atoms — it's that the "
-                "fingerprint places the two near-identical molecules at nearly the "
-                "same point, so there's little signal to attend to in the first place."
+                f"Two things stand out. The captured fraction sits in a **tight band "
+                f"— about half to three-quarters of the gap** (mean ≈ {_mean_cap:.0%}), "
+                f"and it holds across two unrelated target families and both "
+                f"fingerprints. Yet the attention concentration underneath it swings "
+                f"by more than 100× — from models that barely touch the changed atoms "
+                f"to ones that pile onto them — with **no relationship** to how much of "
+                f"the cliff gets captured (Pearson r ≈ **{_r:.2f}**).\n\n"
+                "So attending to the right atoms is not the bottleneck. Whether or not "
+                "a model looks at the atoms that changed, it does the same thing: it "
+                "pulls its prediction for both molecules toward what similar structures "
+                "scored in training, shrinking the gap by a roughly constant amount. "
+                "Knowing *where* the change is doesn't tell the model *how much* it "
+                "should matter — and an activity cliff is exactly the case where a small, "
+                "well-located change has an outsized effect. Whether the fingerprint can "
+                "even *represent* that change well enough to do better is the next "
+                "question — so next we take fingerprints apart and look."
             ).callout(kind="info"),
             mo.md("---"),
         ])
